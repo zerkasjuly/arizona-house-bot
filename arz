@@ -3,7 +3,8 @@ from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-TOKEN = "PASTE_YOUR_BOT_TOKEN_HERE"
+import os
+TOKEN = os.getenv("TOKEN")
 watch_list = {}
 
 
