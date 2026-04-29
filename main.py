@@ -33,20 +33,52 @@ def calc_time(payday, safe):
 
 
 # ---------- NOTIFY ----------
-async def notify(context: ContextTypes.DEFAULT_TYPE):
+async def notify_custom(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
+    house_id, text = job.data.split("|")
+
     await context.bot.send_message(
         job.chat_id,
-        f"⚠️ Дом {job.data} скоро слетает!"
+        f"🏠 Дом {house_id}\n{text}"
     )
 
 
+# ---------- SCHEDULER ----------
 def schedule(job_queue, chat_id, house_id, payday, safe):
     drop = calc_time(payday, safe)
-    delay = (drop - now_msk()).total_seconds()
 
-    if delay > 0:
-        job_queue.run_once(notify, delay, chat_id=chat_id, data=house_id)
+    now = now_msk()
+    seconds_left = (drop - now).total_seconds()
+
+    if seconds_left <= 0:
+        return
+
+    alerts = [
+        (seconds_left - 600, "⏰ 10 минут до слёта"),
+        (seconds_left - 300, "⏰ 5 минут до слёта"),
+    ]
+
+    for delay, text in alerts:
+        if delay > 0:
+            job_queue.run_once(
+                notify_custom,
+                delay,
+                chat_id=chat_id,
+                data=f"{house_id}|{text}"
+            )
+
+
+# ---------- AUTO REFRESH ----------
+async def refresh_loop(app):
+    while True:
+        await asyncio.sleep(300)  # каждые 5 минут
+
+        cur.execute("SELECT * FROM houses")
+        rows = cur.fetchall()
+
+        for hid, payday, safe in rows:
+            for chat_id in app.chat_data:
+                schedule(app.job_queue, chat_id, hid, payday, safe)
 
 
 # ---------- ADD ----------
@@ -64,7 +96,7 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         schedule(context.job_queue, update.effective_chat.id, hid, payday, safe)
 
         await update.message.reply_text(
-            f"🏠 Добавлено {hid}\n"
+            f"🏠 Дом {hid} добавлен\n"
             f"{'🛡 страховка' if safe else '❌ без'}\n"
             f"Слёт: {calc_time(payday, safe).strftime('%H:%M')} МСК"
         )
@@ -110,8 +142,6 @@ async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             parts = text.split()
             payday = int(parts[2])
-            hid = 999  # если нет ID — заглушка
-
             safe = 1 if "страх" in text else 0
 
             drop = calc_time(payday, safe)
@@ -132,7 +162,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/add id payday safe/no\n"
         "/list\n"
         "/del id\n\n"
-        "Или просто пиши: 'слетит через 3 payday'"
+        "Пиши: 'слетит через 3 payday'"
     )
 
 
