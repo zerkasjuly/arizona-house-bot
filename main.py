@@ -56,32 +56,28 @@ NO_SAFE_TABLE = {
     10: 15, 8: 16, 6: 17, 4: 18, 2: 19
 }
 
-# ---------- TIME CALC ----------
+# ---------- FIXED TIME CALC (NO BACK JUMP BUG) ----------
 def calc_time(payday, safe):
-    base = now_msk()
+    now = now_msk()
 
     table = SAFE_TABLE if safe else NO_SAFE_TABLE
 
-    keys = sorted(table.keys(), reverse=True)
+    # все возможные часы слёта
+    hours = sorted(set(table.values()))
 
-    selected = None
-    for k in keys:
-        if payday >= k:
-            selected = k
-            break
+    # начало отсчёта (текущий час)
+    base = now.replace(minute=0, second=0, microsecond=0)
 
-    if selected is None:
-        selected = min(keys)
+    # ищем ближайший будущий слёт
+    for h in hours:
+        candidate = base.replace(hour=h)
 
-    hour = table[selected]
+        if candidate <= now:
+            candidate += timedelta(days=1)
 
-    drop = base.replace(minute=0, second=0, microsecond=0)
-    drop = drop.replace(hour=hour)
+        return candidate
 
-    if drop < base:
-        drop += timedelta(days=1)
-
-    return drop
+    return base + timedelta(hours=1)
 
 # ---------- COLORS ----------
 def get_color(hours_left):
@@ -89,8 +85,7 @@ def get_color(hours_left):
         return "🔴"
     elif hours_left < 3:
         return "🟡"
-    else:
-        return "🟢"
+    return "🟢"
 
 # ---------- NOTIFY ----------
 async def notify(context: ContextTypes.DEFAULT_TYPE):
@@ -173,7 +168,7 @@ async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✅ Добавлено:\n\n" + "\n".join(f"🏠 {a}" for a in added)
         )
 
-# ---------- LIST (FINAL FORMAT FIX) ----------
+# ---------- LIST ----------
 async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
@@ -211,8 +206,7 @@ async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += (
             f"{color} {hid} | {server} | "
             f"{'🛡' if safe else '❌'} | "
-            f"{drop.strftime('%H:%M')} | "
-            f"{time_info}\n"
+            f"{drop.strftime('%H:%M')} | {time_info}\n"
             f"🕒 Дата записи: {created_at}\n\n"
         )
 
@@ -249,7 +243,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
 
         await query.edit_message_text(
-            f"✏️ Дом {hid} удалён.\nОтправь его заново."
+            f"✏️ Дом {hid} удалён. Отправь заново."
         )
 
 # ---------- SERVER MENU ----------
@@ -265,7 +259,7 @@ async def server_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🏠 Бот домов Arizona RP\n\n"
+        "🏠 Arizona RP Bot\n\n"
         "Формат:\n"
         "123 16 со страховкой Mesa\n\n"
         "/list — список"
