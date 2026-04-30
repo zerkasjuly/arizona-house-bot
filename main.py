@@ -260,8 +260,8 @@ async def list_records(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for server, houses in grouped.items():
         msg += f"🌍 {SERVERS[server]} ({server})\n"
-
-        for r in houses:
+        
+for r in houses:
     if r["alt"]:
         msg += (
             f"🏠 {r['house']}\n"
