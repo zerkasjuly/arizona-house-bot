@@ -18,9 +18,8 @@ SERVERS = {
 
 
 def calc_drop(start_time, payday, insured):
-    current = datetime.strptime(start_time, "%H:%M")
     now = datetime.now()
-    current = current.replace(year=now.year, month=now.month, day=now.day)
+    current = datetime.strptime(start_time, "%H:%M").replace(year=now.year, month=now.month, day=now.day)
     p = payday
 
     while True:
@@ -28,107 +27,101 @@ def calc_drop(start_time, payday, insured):
         p -= 1 if insured else 2
 
         if insured and p == 2:
-            current += timedelta(hours=1)
-            return current
-        elif not insured and p <= 1:
+            return current + timedelta(hours=1)
+        if not insured and p <= 1:
             return current
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "/add 05:00 321 5 yes 14\n"
-        "/list\n"
-        "/delete 321\n"
-        "/edit 321 06:00 7 no 14"
+        "Команды:\n"
+        "/add (можно много строк)\n"
+        "/list\n/delete ID\n/edit ID время payday yes/no сервер"
     )
 
 
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        start_time, house_id, payday, insurance, server = context.args
-        payday = int(payday)
-        insured = insurance.lower() == "yes"
-        drop_dt = calc_drop(start_time, payday, insured)
+    text = update.message.text.replace('/add', '').strip()
+    lines = text.split('\n')
+    result = []
 
-        records.append({
-            "house": house_id,
-            "payday": payday,
-            "insured": insured,
-            "server": server,
-            "drop": drop_dt
-        })
+    for line in lines:
+        try:
+            start_time, house_id, payday, insurance, server = line.split()
+            payday = int(payday)
+            insured = insurance.lower() == 'yes'
+            drop = calc_drop(start_time, payday, insured)
 
-        await update.message.reply_text(
-            f"✅ {house_id}\n"
-            f"🌍 {SERVERS.get(server)}\n"
-            f"⏰ {drop_dt.strftime('%d.%m %H:%M')}"
-        )
-    except:
-        await update.message.reply_text("Ошибка. Пример: /add 05:00 321 5 yes 14")
+            records.append({
+                'house': house_id,
+                'payday': payday,
+                'insured': insured,
+                'server': server,
+                'drop': drop
+            })
+
+            result.append(f"✅ {house_id} → {drop.strftime('%d.%m %H:%M')}")
+        except:
+            result.append(f"❌ Ошибка: {line}")
+
+    await update.message.reply_text('\n'.join(result))
 
 
 async def delete_record(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        house_id = context.args[0]
-        global records
-        records = [r for r in records if r['house'] != house_id]
-        await update.message.reply_text(f"🗑 Удалён {house_id}")
-    except:
-        await update.message.reply_text("/delete 321")
+    house_id = context.args[0]
+    global records
+    records = [r for r in records if r['house'] != house_id]
+    await update.message.reply_text(f"🗑 Удалён {house_id}")
 
 
 async def edit_record(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        house_id, start_time, payday, insurance, server = context.args
-        payday = int(payday)
-        insured = insurance.lower() == "yes"
+    house_id, start_time, payday, insurance, server = context.args
+    payday = int(payday)
+    insured = insurance.lower() == 'yes'
 
-        for r in records:
-            if r['house'] == house_id:
-                r['payday'] = payday
-                r['insured'] = insured
-                r['server'] = server
-                r['drop'] = calc_drop(start_time, payday, insured)
-                await update.message.reply_text(f"✏️ Обновлён {house_id}")
-                return
-
-        await update.message.reply_text("Дом не найден")
-    except:
-        await update.message.reply_text("/edit 321 05:00 5 yes 14")
+    for r in records:
+        if r['house'] == house_id:
+            r.update({
+                'payday': payday,
+                'insured': insured,
+                'server': server,
+                'drop': calc_drop(start_time, payday, insured)
+            })
+            await update.message.reply_text(f"✏️ Обновлён {house_id}")
+            return
 
 
 async def list_records(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not records:
-        await update.message.reply_text("Пусто")
+        await update.message.reply_text("Список пуст")
         return
 
     grouped = {}
-    for r in records:
+    for r in sorted(records, key=lambda x: x['drop']):
         grouped.setdefault(r['server'], []).append(r)
 
-    msg = "🔥 СЛЁТЫ\n\n"
+    msg = "🔥 Список слётов\n\n"
 
-    for server in sorted(grouped.keys()):
-        msg += f"🌍 {server}: {SERVERS.get(server)}\n"
-        for r in sorted(grouped[server], key=lambda x: x['drop']):
+    for server, houses in grouped.items():
+        msg += f"🌍 {SERVERS.get(server)} ({server})\n"
+        for r in houses:
             msg += (
                 f"⏰ {r['drop'].strftime('%d.%m %H:%M')} | 🏠 {r['house']}\n"
-                f"🛡 {'Страховка' if r['insured'] else 'Без'}\n"
+                f"🛡 {'Страховка' if r['insured'] else 'Без страховки'}\n\n"
             )
-        msg += "\n"
 
     await update.message.reply_text(msg)
 
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("add", add))
-    app.add_handler(CommandHandler("list", list_records))
-    app.add_handler(CommandHandler("delete", delete_record))
-    app.add_handler(CommandHandler("edit", edit_record))
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('add', add))
+    app.add_handler(CommandHandler('list', list_records))
+    app.add_handler(CommandHandler('delete', delete_record))
+    app.add_handler(CommandHandler('edit', edit_record))
     app.run_polling()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
