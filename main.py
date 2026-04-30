@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS houses (
 """)
 conn.commit()
 
-# ---------- ARIZONA LOGIC ----------
+# ---------- ARIZONA TABLES ----------
 SAFE_TABLE = {
     16: 15, 15: 16, 14: 17, 13: 18, 12: 19,
     11: 20, 10: 21, 9: 22, 8: 23,
@@ -56,7 +56,7 @@ NO_SAFE_TABLE = {
     10: 15, 8: 16, 6: 17, 4: 18, 2: 19
 }
 
-# ---------- FIXED TIME CALC (NO BACK JUMP BUG) ----------
+# ---------- FIXED CALC (MAIN FIX) ----------
 def calc_time(payday, safe):
     now = now_msk()
 
@@ -65,19 +65,21 @@ def calc_time(payday, safe):
     # все возможные часы слёта
     hours = sorted(set(table.values()))
 
-    # начало отсчёта (текущий час)
     base = now.replace(minute=0, second=0, microsecond=0)
 
-    # ищем ближайший будущий слёт
+    best = None
+
     for h in hours:
         candidate = base.replace(hour=h)
 
+        # если уже прошло — переносим на следующий день
         if candidate <= now:
             candidate += timedelta(days=1)
 
-        return candidate
+        if best is None or candidate < best:
+            best = candidate
 
-    return base + timedelta(hours=1)
+    return best
 
 # ---------- COLORS ----------
 def get_color(hours_left):
