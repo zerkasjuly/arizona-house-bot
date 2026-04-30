@@ -13,39 +13,55 @@ from telegram.ext import (
 )
 
 TOKEN = os.getenv("BOT_TOKEN")
-
 TZ = ZoneInfo("Europe/Moscow")
 
 
 # =========================
-# TIME PARSE
+# TIME
 # =========================
 def parse_time(t: str):
-    h, m = map(int, t.split(":"))
+    h, _ = map(int, t.split(":"))
     return datetime.now(TZ).replace(hour=h, minute=0, second=0, microsecond=0)
 
 
 # =========================
-# SIMULATION FIXED
+# CORE LOGIC
 # =========================
 def calc_hours(payday: int, safe: int):
     if safe:
-        return payday - 1
+        return max(payday - 1, 0)
     else:
-        # ❗ ВАЖНОЕ ИСПРАВЛЕНИЕ
-        # (-2 шагами, слёт на 1)
-        return (payday - 1 + 1) // 2
+        return max((payday - 1 + 1) // 2, 0)
+
+
+def get_drop(start, payday, safe):
+    return start + timedelta(hours=calc_hours(payday, safe))
 
 
 # =========================
-# PARSER (НОВЫЙ ФОРМАТ)
+# DB
+# =========================
+conn = sqlite3.connect("houses.db", check_same_thread=False)
+cur = conn.cursor()
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS houses (
+    id INTEGER PRIMARY KEY,
+    payday INTEGER,
+    safe INTEGER,
+    server TEXT,
+    drop_time TEXT
+)
+""")
+conn.commit()
+
+
+# =========================
+# PARSER
 # =========================
 async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         text = update.message.text.lower()
-
-        # формат:
-        # 05:00 / 1111 / 3 / без / phoenix
         parts = [x.strip() for x in text.split("/")]
 
         if len(parts) < 5:
@@ -59,16 +75,60 @@ async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         safe = 1 if "со" in mode else 0
 
-        hours = calc_hours(payday, safe)
+        drop = get_drop(t, payday, safe)
 
-        drop = t + timedelta(hours=hours)
+        cur.execute(
+            "REPLACE INTO houses VALUES (?, ?, ?, ?, ?)",
+            (hid, payday, safe, server, drop.isoformat())
+        )
+        conn.commit()
 
         await update.message.reply_text(
-            f"🏠 {hid} | {server}\n⏰ слёт: {drop.strftime('%H:%M')}"
+            f"✅ Добавлено:\n\n"
+            f"🏠 {hid} | {server}\n"
+            f"⏰ слёт: {drop.strftime('%H:%M')}"
         )
 
     except:
-        pass
+        await update.message.reply_text("❌ ошибка формата")
+
+
+# =========================
+# LIST
+# =========================
+async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cur.execute("SELECT * FROM houses")
+    rows = cur.fetchall()
+
+    if not rows:
+        await update.message.reply_text("Пусто")
+        return
+
+    now = datetime.now(TZ).replace(minute=0, second=0, microsecond=0)
+
+    data = []
+
+    for hid, payday, safe, server, drop_str in rows:
+        drop = datetime.fromisoformat(drop_str)
+        hours_left = int((drop - now).total_seconds() // 3600)
+
+        if hours_left <= 2:
+            color = "🔴"
+        elif hours_left <= 5:
+            color = "🟡"
+        else:
+            color = "🟢"
+
+        data.append((drop, f"{color} {hid} | {server} | {drop.strftime('%H:%M')} | ~{hours_left}ч"))
+
+    data.sort(key=lambda x: x[0])
+
+    text = "🏠 Дома (по ближайшему слёту):\n\n"
+
+    for _, line in data:
+        text += line + "\n"
+
+    await update.message.reply_text(text)
 
 
 # =========================
@@ -76,9 +136,10 @@ async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "ФОРМАТ:\n"
+        "🏠 BOT READY\n\n"
+        "Формат:\n"
         "05:00 / 1111 / 3 / без страховки / phoenix\n\n"
-        "/list пока отключен в этой версии"
+        "/list - список"
     )
 
 
@@ -89,6 +150,7 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("list", list_houses))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, parser))
 
     app.run_polling()
