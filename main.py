@@ -2,8 +2,12 @@ import sqlite3
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters, CallbackQueryHandler
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+    CallbackQueryHandler
 )
 import os
 
@@ -14,26 +18,27 @@ def now_msk():
     return datetime.utcnow() + timedelta(hours=3)
 
 # ---------- SERVERS ----------
-SERVER_NAMES = {
-    "mesa": "Mesa", "phoenix": "Phoenix", "tucson": "Tucson",
-    "scottdale": "Scottdale", "chandler": "Chandler",
-    "brainburg": "BrainBurg", "saint rose": "Saint Rose",
-    "red-rock": "Red-Rock", "red rock": "Red-Rock",
-    "yuma": "Yuma", "surprise": "Surprise", "prescott": "Prescott",
-    "glendale": "Glendale", "kingman": "Kingman",
-    "winslow": "Winslow", "payson": "Payson", "gilbert": "Gilbert",
-    "show-low": "Show-Low", "show low": "Show-Low",
-    "casa-grande": "Casa-Grande", "casa grande": "Casa-Grande",
-    "page": "Page", "sun-city": "Sun-City", "sun city": "Sun-City",
-    "queen-creek": "Queen-Creek", "queen creek": "Queen-Creek",
-    "sedona": "Sedona", "holiday": "Holiday", "wednesday": "Wednesday",
-    "yava": "Yava", "faraway": "Faraway", "bumble bee": "Bumble Bee",
-    "christmas": "Christmas", "mirage": "Mirage",
-    "love": "Love", "drake": "Drake", "space": "Space"
-}
+SERVERS = [
+    "Mesa", "Phoenix", "Tucson", "Scottdale", "Chandler",
+    "BrainBurg", "Saint Rose", "Red-Rock", "Yuma", "Surprise",
+    "Prescott", "Glendale", "Kingman", "Winslow", "Payson",
+    "Gilbert", "Show-Low", "Casa-Grande", "Page", "Sun-City",
+    "Queen-Creek", "Sedona", "Holiday", "Wednesday", "Yava",
+    "Faraway", "Bumble Bee", "Christmas", "Mirage", "Love",
+    "Drake", "Space"
+]
 
-def normalize_server(name):
-    return SERVER_NAMES.get(name.lower(), name.title())
+def server_keyboard():
+    kb = []
+    row = []
+    for i, s in enumerate(SERVERS, 1):
+        row.append(InlineKeyboardButton(s, callback_data=f"srv_{s}"))
+        if i % 3 == 0:
+            kb.append(row)
+            row = []
+    if row:
+        kb.append(row)
+    return InlineKeyboardMarkup(kb)
 
 # ---------- DB ----------
 conn = sqlite3.connect("houses.db", check_same_thread=False)
@@ -41,55 +46,59 @@ cur = conn.cursor()
 
 cur.execute("""
 CREATE TABLE IF NOT EXISTS houses (
-    id INTEGER PRIMARY KEY,
+    id INTEGER,
     payday INTEGER,
     safe INTEGER,
-    server TEXT
+    server TEXT,
+    chat_id INTEGER
 )
 """)
 conn.commit()
 
-# ---------- CALC ----------
+# ---------- TIME CALC ----------
 def calc_time(payday, safe):
     real = payday - 1 if safe else payday
     return now_msk() + timedelta(hours=max(real, 1))
 
 # ---------- NOTIFY ----------
 async def notify(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    hid, text = job.data.split("|")
-    await context.bot.send_message(job.chat_id, f"🏠 Дом {hid}\n{text}")
+    hid, text = context.job.data.split("|")
+    await context.bot.send_message(context.job.chat_id, f"🏠 Дом {hid}\n{text}")
 
 # ---------- SCHEDULE ----------
-def schedule(job_queue, chat_id, hid, payday, safe):
+def schedule(app, chat_id, hid, payday, safe):
     drop = calc_time(payday, safe)
     seconds = (drop - now_msk()).total_seconds()
 
     if seconds <= 0:
         return
 
-    alerts = [(seconds-600, "⏰ 10 мин"), (seconds-300, "⏰ 5 мин")]
+    alerts = [
+        (seconds - 600, "⏰ 10 минут до слёта"),
+        (seconds - 300, "⏰ 5 минут до слёта"),
+    ]
 
-    for delay, txt in alerts:
+    for delay, text in alerts:
         if delay > 0:
-            job_queue.run_once(
-                notify, delay,
+            app.job_queue.run_once(
+                notify,
+                delay,
                 chat_id=chat_id,
-                data=f"{hid}|{txt}"
+                data=f"{hid}|{text}"
             )
 
-# ---------- RESTORE ----------
+# ---------- RESTORE AFTER RESTART ----------
 async def restore_jobs(app):
     cur.execute("SELECT * FROM houses")
-    for hid, payday, safe, server in cur.fetchall():
-        for chat_id in app.chat_data:
-            schedule(app.job_queue, chat_id, hid, payday, safe)
+    for hid, payday, safe, server, chat_id in cur.fetchall():
+        schedule(app, chat_id, hid, payday, safe)
 
-# ---------- PARSER ----------
+# ---------- ADD / PARSER ----------
 async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.lower()
-    lines = text.split("\n")
+    text = update.message.text.lower().strip()
+    chat_id = update.effective_chat.id
 
+    lines = text.split("\n")
     added = []
 
     for line in lines:
@@ -100,69 +109,91 @@ async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             hid = int(parts[0])
             payday = int(parts[1])
-            server = normalize_server(parts[-1])
             safe = 1 if "со страховкой" in line else 0
+            server = parts[-1].capitalize()
 
-            cur.execute(
-                "REPLACE INTO houses VALUES (?, ?, ?, ?)",
-                (hid, payday, safe, server)
-            )
+            cur.execute("""
+                REPLACE INTO houses VALUES (?, ?, ?, ?, ?)
+            """, (hid, payday, safe, server, chat_id))
 
-            schedule(context.job_queue, update.effective_chat.id, hid, payday, safe)
-            added.append(f"{hid} ({server})")
+            schedule(context.application, chat_id, hid, payday, safe)
+
+            added.append((hid, server, safe))
         except:
             pass
 
     conn.commit()
 
     if added:
-        msg = "✅ Добавлены:\n" + "\n".join(f"• {a}" for a in added)
+        msg = "✅ Добавлено:\n\n"
+        for hid, server, safe in added:
+            msg += f"🏠 {hid} | 🖥 {server} | {'🛡' if safe else '❌'}\n"
         await update.message.reply_text(msg)
 
 # ---------- LIST ----------
 async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cur.execute("SELECT * FROM houses")
+    chat_id = update.effective_chat.id
+
+    cur.execute("SELECT * FROM houses WHERE chat_id=?", (chat_id,))
     rows = cur.fetchall()
 
     if not rows:
         await update.message.reply_text("Пусто")
         return
 
-    data = []
-    for hid, payday, safe, server in rows:
-        drop = calc_time(payday, safe)
-        data.append((drop, hid, safe, server))
-
-    data.sort(key=lambda x: x[0])
-
     text = "🏠 Дома:\n\n"
     keyboard = []
 
-    for drop, hid, safe, server in data:
+    for hid, payday, safe, server, _ in rows:
+        drop = calc_time(payday, safe)
         text += f"{hid} | {server} | {'🛡' if safe else '❌'} | {drop.strftime('%H:%M')}\n"
-        keyboard.append([InlineKeyboardButton(f"❌ {hid}", callback_data=f"del_{hid}")])
 
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        keyboard.append([
+            InlineKeyboardButton(f"❌ {hid}", callback_data=f"del_{hid}")
+        ])
 
-# ---------- BUTTON DELETE ----------
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ---------- BUTTONS ----------
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data.startswith("del_"):
-        hid = int(query.data.split("_")[1])
-        cur.execute("DELETE FROM houses WHERE id=?", (hid,))
+    chat_id = query.message.chat.id
+    data = query.data
+
+    # ❌ delete
+    if data.startswith("del_"):
+        hid = int(data.split("_")[1])
+
+        cur.execute("DELETE FROM houses WHERE id=? AND chat_id=?", (hid, chat_id))
         conn.commit()
+
         await query.edit_message_text(f"❌ Дом {hid} удалён")
+
+    # 🖥 server select
+    elif data.startswith("srv_"):
+        server = data.split("_", 1)[1]
+        await query.edit_message_text(f"🖥 Сервер выбран: {server}")
+
+# ---------- SERVER MENU ----------
+async def server_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Выбери сервер:",
+        reply_markup=server_keyboard()
+    )
 
 # ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🏠 Бот домов\n\n"
-        "Можно вставлять несколько домов:\n"
-        "123 3 со страховкой Mesa\n"
-        "456 5 без страховки Phoenix\n\n"
-        "/list — список"
+        "Пример:\n"
+        "258 17 со страховкой Mesa\n\n"
+        "/server — выбрать сервер\n"
+        "/list — список домов"
     )
 
 # ---------- MAIN ----------
@@ -171,8 +202,10 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("list", list_houses))
+    app.add_handler(CommandHandler("server", server_menu))
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, parser))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CallbackQueryHandler(buttons))
 
     app.post_init = restore_jobs
 
