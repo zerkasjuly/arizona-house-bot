@@ -55,15 +55,33 @@ CREATE TABLE IF NOT EXISTS houses (
 """)
 conn.commit()
 
-# ---------- TIME CALC ----------
+# ---------- TIME LOGIC (FIXED ROUND TO NEXT HOUR) ----------
 def calc_time(payday, safe):
-    real = payday - 1 if safe else payday
-    return now_msk() + timedelta(hours=max(real, 1))
+    base = now_msk()
+
+    if safe:
+        payday -= 1
+
+    payday = max(payday, 1)
+
+    t = base + timedelta(hours=payday)
+
+    # 🔥 округление до следующего часа :00
+    if t.minute > 0 or t.second > 0:
+        t = t.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    else:
+        t = t.replace(minute=0, second=0, microsecond=0)
+
+    return t
 
 # ---------- NOTIFY ----------
 async def notify(context: ContextTypes.DEFAULT_TYPE):
-    hid, text = context.job.data.split("|")
-    await context.bot.send_message(context.job.chat_id, f"🏠 Дом {hid}\n{text}")
+    hid, text, chat_id = context.job.data.split("|")
+
+    await context.bot.send_message(
+        int(chat_id),
+        f"🏠 Дом {hid}\n{text}"
+    )
 
 # ---------- SCHEDULE ----------
 def schedule(app, chat_id, hid, payday, safe):
@@ -84,16 +102,16 @@ def schedule(app, chat_id, hid, payday, safe):
                 notify,
                 delay,
                 chat_id=chat_id,
-                data=f"{hid}|{text}"
+                data=f"{hid}|{text}|{chat_id}"
             )
 
 # ---------- RESTORE AFTER RESTART ----------
-async def restore_jobs(app):
+async def restore(app):
     cur.execute("SELECT * FROM houses")
     for hid, payday, safe, server, chat_id in cur.fetchall():
         schedule(app, chat_id, hid, payday, safe)
 
-# ---------- ADD / PARSER ----------
+# ---------- PARSER ----------
 async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.lower().strip()
     chat_id = update.effective_chat.id
@@ -118,17 +136,18 @@ async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             schedule(context.application, chat_id, hid, payday, safe)
 
-            added.append((hid, server, safe))
+            drop = calc_time(payday, safe).strftime("%H:%M")
+
+            added.append(f"{hid} | {server} | {drop}")
         except:
             pass
 
     conn.commit()
 
     if added:
-        msg = "✅ Добавлено:\n\n"
-        for hid, server, safe in added:
-            msg += f"🏠 {hid} | 🖥 {server} | {'🛡' if safe else '❌'}\n"
-        await update.message.reply_text(msg)
+        await update.message.reply_text(
+            "✅ Добавлено:\n\n" + "\n".join(f"🏠 {a}" for a in added)
+        )
 
 # ---------- LIST ----------
 async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -146,10 +165,12 @@ async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for hid, payday, safe, server, _ in rows:
         drop = calc_time(payday, safe)
+
         text += f"{hid} | {server} | {'🛡' if safe else '❌'} | {drop.strftime('%H:%M')}\n"
 
         keyboard.append([
-            InlineKeyboardButton(f"❌ {hid}", callback_data=f"del_{hid}")
+            InlineKeyboardButton(f"❌ {hid}", callback_data=f"del_{hid}"),
+            InlineKeyboardButton(f"✏️ {hid}", callback_data=f"edit_{hid}")
         ])
 
     await update.message.reply_text(
@@ -165,7 +186,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = query.message.chat.id
     data = query.data
 
-    # ❌ delete
+    # ❌ DELETE
     if data.startswith("del_"):
         hid = int(data.split("_")[1])
 
@@ -174,7 +195,18 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.edit_message_text(f"❌ Дом {hid} удалён")
 
-    # 🖥 server select
+    # ✏️ EDIT
+    elif data.startswith("edit_"):
+        hid = int(data.split("_")[1])
+
+        cur.execute("DELETE FROM houses WHERE id=? AND chat_id=?", (hid, chat_id))
+        conn.commit()
+
+        await query.edit_message_text(
+            f"✏️ Дом {hid} удалён.\nОтправь его заново с новыми параметрами."
+        )
+
+    # 🖥 SERVER SELECT
     elif data.startswith("srv_"):
         server = data.split("_", 1)[1]
         await query.edit_message_text(f"🖥 Сервер выбран: {server}")
@@ -190,7 +222,7 @@ async def server_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🏠 Бот домов\n\n"
-        "Пример:\n"
+        "Формат:\n"
         "258 17 со страховкой Mesa\n\n"
         "/server — выбрать сервер\n"
         "/list — список домов"
@@ -207,7 +239,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, parser))
     app.add_handler(CallbackQueryHandler(buttons))
 
-    app.post_init = restore_jobs
+    app.post_init = restore
 
     app.run_polling()
 
