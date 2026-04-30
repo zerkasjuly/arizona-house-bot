@@ -1,158 +1,96 @@
 import os
-import sqlite3
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 TOKEN = os.getenv("BOT_TOKEN")
-TZ = ZoneInfo("Europe/Moscow")
+records = []
+
+SERVERS = {
+    "01": "Phoenix", "02": "Tucson", "03": "Scottdale", "04": "Chandler",
+    "05": "Brainburg", "06": "SaintRose", "07": "Mesa", "08": "Red-Rock",
+    "09": "Yuma", "10": "Surprise", "11": "Prescott", "12": "Glendale",
+    "13": "Kingman", "14": "Winslow", "15": "Payson", "16": "Gilbert",
+    "17": "Show-Low", "18": "Casa-Grande", "19": "Page", "20": "Sun-City",
+    "21": "Queen-Creek", "22": "Sedona", "23": "Holiday", "24": "Wednesday",
+    "25": "Yava", "26": "Faraway", "27": "Bumble-Bee", "28": "Mirage"
+}
 
 
-# =========================
-# TIME
-# =========================
-def parse_time(t: str):
-    h, _ = map(int, t.split(":"))
-    return datetime.now(TZ).replace(hour=h, minute=0, second=0, microsecond=0)
+def calc_drop(start_time, payday, insured):
+    current = datetime.strptime(start_time, "%H:%M")
+    p = payday
 
+    while True:
+        current += timedelta(hours=1)
+        p -= 1 if insured else 2
 
-# =========================
-# CORE LOGIC
-# =========================
-def calc_hours(payday: int, safe: int):
-    if safe:
-        return max(payday - 1, 0)
-    else:
-        return max((payday - 1 + 1) // 2, 0)
-
-
-def get_drop(start, payday, safe):
-    return start + timedelta(hours=calc_hours(payday, safe))
-
-
-# =========================
-# DB
-# =========================
-conn = sqlite3.connect("houses.db", check_same_thread=False)
-cur = conn.cursor()
-
-cur.execute("""
-CREATE TABLE IF NOT EXISTS houses (
-    id INTEGER PRIMARY KEY,
-    payday INTEGER,
-    safe INTEGER,
-    server TEXT,
-    drop_time TEXT
-)
-""")
-conn.commit()
-
-
-# =========================
-# PARSER
-# =========================
-async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        text = update.message.text.lower()
-        parts = [x.strip() for x in text.split("/")]
-
-        if len(parts) < 5:
-            return
-
-        t = parse_time(parts[0])
-        hid = int(parts[1])
-        payday = int(parts[2])
-        mode = parts[3]
-        server = parts[4]
-
-        safe = 1 if "со" in mode else 0
-
-        drop = get_drop(t, payday, safe)
-
-        cur.execute(
-            "REPLACE INTO houses VALUES (?, ?, ?, ?, ?)",
-            (hid, payday, safe, server, drop.isoformat())
-        )
-        conn.commit()
-
-        await update.message.reply_text(
-            f"✅ Добавлено:\n\n"
-            f"🏠 {hid} | {server}\n"
-            f"⏰ слёт: {drop.strftime('%H:%M')}"
-        )
-
-    except:
-        await update.message.reply_text("❌ ошибка формата")
-
-
-# =========================
-# LIST
-# =========================
-async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cur.execute("SELECT * FROM houses")
-    rows = cur.fetchall()
-
-    if not rows:
-        await update.message.reply_text("Пусто")
-        return
-
-    now = datetime.now(TZ).replace(minute=0, second=0, microsecond=0)
-
-    data = []
-
-    for hid, payday, safe, server, drop_str in rows:
-        drop = datetime.fromisoformat(drop_str)
-        hours_left = int((drop - now).total_seconds() // 3600)
-
-        if hours_left <= 2:
-            color = "🔴"
-        elif hours_left <= 5:
-            color = "🟡"
+        if insured:
+            if p == 2:
+                current += timedelta(hours=1)
+                return current.strftime("%H:%M")
         else:
-            color = "🟢"
-
-        data.append((drop, f"{color} {hid} | {server} | {drop.strftime('%H:%M')} | ~{hours_left}ч"))
-
-    data.sort(key=lambda x: x[0])
-
-    text = "🏠 Дома (по ближайшему слёту):\n\n"
-
-    for _, line in data:
-        text += line + "\n"
-
-    await update.message.reply_text(text)
+            if p <= 1:
+                return current.strftime("%H:%M")
 
 
-# =========================
-# START
-# =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🏠 BOT READY\n\n"
-        "Формат:\n"
-        "05:00 / 1111 / 3 / без страховки / phoenix\n\n"
-        "/list - список"
+        "Используй:\n"
+        "/add 05:00 321 5 yes 07\n\n"
+        "формат:\nвремя id payday yes/no сервер"
     )
 
 
-# =========================
-# MAIN
-# =========================
+async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        start_time, house_id, payday, insurance, server = context.args
+        payday = int(payday)
+        insured = insurance.lower() == "yes"
+
+        drop = calc_drop(start_time, payday, insured)
+
+        record = {
+            "drop": drop,
+            "house": house_id,
+            "payday": payday,
+            "insured": insured,
+            "server": server
+        }
+        records.append(record)
+
+        await update.message.reply_text(
+            f"✅ Дом {house_id} добавлен\n"
+            f"🌍 {SERVERS.get(server, server)}\n"
+            f"⏰ Слёт: {drop}"
+        )
+    except Exception as e:
+        await update.message.reply_text("Пример: /add 05:00 321 5 yes 07")
+
+
+async def list_records(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not records:
+        await update.message.reply_text("Список пуст")
+        return
+
+    sorted_records = sorted(records, key=lambda x: x['drop'])
+    msg = "🔥 Список слётов\n\n"
+
+    for r in sorted_records:
+        msg += (
+            f"⏰ {r['drop']} | 🏠 {r['house']}\n"
+            f"🌍 {SERVERS.get(r['server'], r['server'])}\n"
+            f"🛡 {'Страховка' if r['insured'] else 'Без страховки'}\n\n"
+        )
+
+    await update.message.reply_text(msg)
+
+
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("list", list_houses))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, parser))
-
+    app.add_handler(CommandHandler("add", add))
+    app.add_handler(CommandHandler("list", list_records))
     app.run_polling()
 
 
