@@ -55,13 +55,21 @@ def calc_time(payday, safe):
 
     t = base + timedelta(hours=payday)
 
-    # округление до следующего часа
     if t.minute > 0 or t.second > 0:
         t = t.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     else:
         t = t.replace(minute=0, second=0, microsecond=0)
 
     return t
+
+# ---------- COLOR SYSTEM ----------
+def get_color(hours_left):
+    if hours_left < 1:
+        return "🔴"
+    elif hours_left < 3:
+        return "🟡"
+    else:
+        return "🟢"
 
 # ---------- NOTIFY ----------
 async def notify(context: ContextTypes.DEFAULT_TYPE):
@@ -94,7 +102,7 @@ def schedule(app, chat_id, hid, payday, safe):
                 data=f"{hid}|{text}|{chat_id}"
             )
 
-# ---------- RESTORE AFTER RESTART ----------
+# ---------- RESTORE ----------
 async def restore(app):
     await asyncio.sleep(2)
 
@@ -142,7 +150,7 @@ async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✅ Добавлено:\n\n" + "\n".join(f"🏠 {a}" for a in added)
         )
 
-# ---------- LIST (SORTED FIX) ----------
+# ---------- LIST (COLOR SYSTEM) ----------
 async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
@@ -157,16 +165,32 @@ async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for hid, payday, safe, server, _ in rows:
         drop = calc_time(payday, safe)
-        data.append((drop, hid, safe, server))
 
-    # 🔥 сортировка по ближайшему слёту
+        now = now_msk()
+        hours_left = (drop - now).total_seconds() / 3600
+
+        data.append((drop, hid, safe, server, hours_left))
+
+    # сортировка по ближайшему слёту
     data.sort(key=lambda x: x[0])
 
     text = "🏠 Дома (по ближайшему слёту):\n\n"
     keyboard = []
 
-    for drop, hid, safe, server in data:
-        text += f"{hid} | {server} | {'🛡' if safe else '❌'} | {drop.strftime('%H:%M')}\n"
+    for drop, hid, safe, server, hours_left in data:
+
+        color = get_color(hours_left)
+
+        if hours_left >= 1:
+            time_info = f"⏳ {hours_left:.1f} ч"
+        else:
+            time_info = f"⏳ {int(hours_left * 60)} мин"
+
+        text += (
+            f"{color} {hid} | {server} | "
+            f"{'🛡' if safe else '❌'} | "
+            f"{drop.strftime('%H:%M')} | {time_info}\n"
+        )
 
         keyboard.append([
             InlineKeyboardButton(f"❌ {hid}", callback_data=f"del_{hid}"),
@@ -220,7 +244,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🏠 Бот домов\n\n"
         "Формат:\n"
         "258 17 со страховкой Mesa\n\n"
-        "/list — список домов"
+        "/list — список"
     )
 
 # ---------- MAIN ----------
