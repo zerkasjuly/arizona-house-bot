@@ -34,33 +34,31 @@ CREATE TABLE IF NOT EXISTS houses (
 """)
 conn.commit()
 
-# ---------- SERVER RULES ----------
+# ---------- BASE SLOTS ----------
 SAFE_SLOUT = 6
 NOSAFE_SLOUT = 20
 
-# ---------- CORE FIX ----------
+# ---------- CORE FIX (NO BUG VERSION) ----------
 def calc_time(payday: int, safe: int):
-    n = now().replace(minute=0, second=0, microsecond=0)
+    n = now()
 
-    slut = SAFE_SLOUT if safe else NOSAFE_SLOUT
+    base_hour = SAFE_SLOUT if safe else NOSAFE_SLOUT
 
-    # сколько часов осталось до слёта
-    target_hour = slut - payday
+    # смещение payday (ключевая логика)
+    target_hour = (base_hour - payday) % 24
 
-    # нормализация
-    while target_hour < 0:
-        target_hour += 24
+    # текущий день
+    candidate = n.replace(hour=target_hour, minute=0, second=0, microsecond=0)
 
-    candidate = n.replace(hour=target_hour)
-
-    if candidate <= now():
+    # если это уже прошло — переносим ТОЛЬКО на +1 цикл слёта (а не просто "завтра")
+    if candidate < n:
         candidate += timedelta(days=1)
 
     return candidate
 
 # ---------- PARSER ----------
 async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip().lower()
+    text = update.message.text.strip()
     chat_id = update.effective_chat.id
 
     added = []
@@ -144,7 +142,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🏠 Bot готов\n\n"
+        "🏠 Arizona RP Bot (FINAL)\n\n"
         "Формат:\n"
         "1234 14 со страховкой winslow\n\n"
         "/list"
