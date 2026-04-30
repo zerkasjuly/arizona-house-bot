@@ -45,41 +45,60 @@ CREATE TABLE IF NOT EXISTS houses (
 """)
 conn.commit()
 
-# ---------- ARIZONA TABLES ----------
-SAFE_TABLE = {
-    16: 15, 15: 16, 14: 17, 13: 18, 12: 19,
-    11: 20, 10: 21, 9: 22, 8: 23,
-    7: 0, 6: 1, 5: 2, 4: 3, 3: 4, 2: 5
-}
+# ---------- SAFE SYSTEM (FIXED LOGIC MAP) ----------
+# каждый диапазон payday = свой стабильный слёт
+SAFE_RANGES = [
+    (16, 15),
+    (15, 16),
+    (14, 17),
+    (13, 18),
+    (12, 19),
+    (11, 20),
+    (10, 21),
+    (9, 22),
+    (8, 23),
+    (7, 0),
+    (6, 1),
+    (5, 2),
+    (4, 3),
+    (3, 4),
+    (2, 5),
+]
 
-NO_SAFE_TABLE = {
-    10: 15, 8: 16, 6: 17, 4: 18, 2: 19
-}
+NO_SAFE_RANGES = [
+    (10, 15),
+    (8, 16),
+    (6, 17),
+    (4, 18),
+    (2, 19),
+]
 
-# ---------- FIXED CALC (MAIN FIX) ----------
+# ---------- CALC (FIXED + STABLE) ----------
 def calc_time(payday, safe):
     now = now_msk()
-
-    table = SAFE_TABLE if safe else NO_SAFE_TABLE
-
-    # все возможные часы слёта
-    hours = sorted(set(table.values()))
-
     base = now.replace(minute=0, second=0, microsecond=0)
 
-    best = None
+    rules = SAFE_RANGES if safe else NO_SAFE_RANGES
 
-    for h in hours:
-        candidate = base.replace(hour=h)
+    selected_hour = None
 
-        # если уже прошло — переносим на следующий день
-        if candidate <= now:
-            candidate += timedelta(days=1)
+    # 1. ищем подходящий диапазон payday
+    for limit, hour in rules:
+        if payday >= limit:
+            selected_hour = hour
+            break
 
-        if best is None or candidate < best:
-            best = candidate
+    # fallback (никогда не должен срабатывать, но на всякий)
+    if selected_hour is None:
+        selected_hour = rules[-1][1]
 
-    return best
+    # 2. строим ближайший слёт
+    candidate = base.replace(hour=selected_hour)
+
+    if candidate <= now:
+        candidate += timedelta(days=1)
+
+    return candidate
 
 # ---------- COLORS ----------
 def get_color(hours_left):
@@ -160,6 +179,7 @@ async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
             drop = calc_time(payday, safe).strftime("%H:%M")
 
             added.append(f"{hid} | {server} | {drop}")
+
         except:
             pass
 
@@ -244,19 +264,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cur.execute("DELETE FROM houses WHERE id=? AND chat_id=?", (hid, chat_id))
         conn.commit()
 
-        await query.edit_message_text(
-            f"✏️ Дом {hid} удалён. Отправь заново."
-        )
-
-# ---------- SERVER MENU ----------
-async def server_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton(s, callback_data=f"srv_{s}") for s in SERVERS[i:i+3]]
-          for i in range(0, len(SERVERS), 3)]
-
-    await update.message.reply_text(
-        "Выбери сервер:",
-        reply_markup=InlineKeyboardMarkup(kb)
-    )
+        await query.edit_message_text("✏️ Удалён. Отправь заново.")
 
 # ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -273,7 +281,6 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("list", list_houses))
-    app.add_handler(CommandHandler("server", server_menu))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, parser))
     app.add_handler(CallbackQueryHandler(buttons))
