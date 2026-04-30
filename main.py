@@ -262,19 +262,19 @@ async def list_records(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"🌍 {SERVERS[server]} ({server})\n"
 
         for r in houses:
-            if r["alt"]:
-    msg += (
-        f"🏠 {r['house']}\n"
-        f"⏰ Возможно: {r['drop'].strftime('%d.%m %H:%M')}\n"
-        f"🚨 Точно: {r['alt'].strftime('%d.%m %H:%M')}\n"
-        f"🛡 Страховка\n\n"
-    )
-else:
-    msg += (
-        f"🏠 {r['house']}\n"
-        f"🚨 Слёт: {r['drop'].strftime('%d.%m %H:%M')}\n"
-        f"🛡 Без страховки\n\n"
-    )
+    if r["alt"]:
+        msg += (
+            f"🏠 {r['house']}\n"
+            f"⏰ Возможно: {r['drop'].strftime('%d.%m %H:%M')}\n"
+            f"🚨 Точно: {r['alt'].strftime('%d.%m %H:%M')}\n"
+            f"🛡 Страховка\n\n"
+        )
+    else:
+        msg += (
+            f"🏠 {r['house']}\n"
+            f"🚨 Слёт: {r['drop'].strftime('%d.%m %H:%M')}\n"
+            f"🛡 Без страховки\n\n"
+        )
 
     await update.message.reply_text(msg)
 
