@@ -146,9 +146,7 @@ def schedule(app, chat_id, house, server, insured, drop, alt):
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "/add\n/list\n/edit\n/del\n/gone"
-    )
+    await update.message.reply_text("/add\n/list\n/edit\n/del\n/gone")
 
 
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -260,21 +258,21 @@ async def list_records(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for server, houses in grouped.items():
         msg += f"🌍 {SERVERS[server]} ({server})\n"
-        
-for r in houses:
-    if r["alt"]:
-        msg += (
-            f"🏠 {r['house']}\n"
-            f"⏰ Возможно: {r['drop'].strftime('%d.%m %H:%M')}\n"
-            f"🚨 Точно: {r['alt'].strftime('%d.%m %H:%M')}\n"
-            f"🛡 Страховка\n\n"
-        )
-    else:
-        msg += (
-            f"🏠 {r['house']}\n"
-            f"🚨 Слёт: {r['drop'].strftime('%d.%m %H:%M')}\n"
-            f"🛡 Без страховки\n\n"
-        )
+
+        for r in houses:
+            if r["alt"]:
+                msg += (
+                    f"🏠 {r['house']}\n"
+                    f"⏰ Возможно: {r['drop'].strftime('%d.%m %H:%M')}\n"
+                    f"🚨 Точно: {r['alt'].strftime('%d.%m %H:%M')}\n"
+                    f"🛡 Страховка\n\n"
+                )
+            else:
+                msg += (
+                    f"🏠 {r['house']}\n"
+                    f"🚨 Слёт: {r['drop'].strftime('%d.%m %H:%M')}\n"
+                    f"🛡 Без страховки\n\n"
+                )
 
     await update.message.reply_text(msg)
 
