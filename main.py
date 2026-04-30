@@ -35,22 +35,27 @@ CREATE TABLE IF NOT EXISTS houses (
 conn.commit()
 
 # ---------- BASE SLOTS ----------
-SAFE_SLOUT = 6
-NOSAFE_SLOUT = 20
+SAFE_BASE = 6   # слёт safe
+NOSAFE_BASE = 20  # слёт no safe
 
-# ---------- CORE FIX (NO BUG VERSION) ----------
+# ---------- CORE LOGIC (NO LIMITS, NO TABLES) ----------
 def calc_time(payday: int, safe: int):
+    base = SAFE_BASE if safe else NOSAFE_BASE
+
+    # просто сдвиг назад
+    hour = (base - payday) % 24
+
+    return f"{hour:02d}:00"
+
+# ---------- REAL TIME LEFT (for /list) ----------
+def time_left(payday: int, safe: int):
+    base = SAFE_BASE if safe else NOSAFE_BASE
+
+    target_hour = (base - payday) % 24
+
     n = now()
-
-    base_hour = SAFE_SLOUT if safe else NOSAFE_SLOUT
-
-    # смещение payday (ключевая логика)
-    target_hour = (base_hour - payday) % 24
-
-    # текущий день
     candidate = n.replace(hour=target_hour, minute=0, second=0, microsecond=0)
 
-    # если это уже прошло — переносим ТОЛЬКО на +1 цикл слёта (а не просто "завтра")
     if candidate < n:
         candidate += timedelta(days=1)
 
@@ -81,9 +86,9 @@ async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             conn.commit()
 
-            t = calc_time(payday, safe).strftime("%H:%M")
+            t = calc_time(payday, safe)
 
-            added.append(f"{hid} | {server} | {t}")
+            added.append(f"🏠 {hid} | {server} | {t}")
 
         except:
             pass
@@ -105,17 +110,22 @@ async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = []
 
     for hid, payday, safe, server, _, created in rows:
-        drop = calc_time(payday, safe)
+        drop_time = time_left(payday, safe)
 
-        hours_left = (drop - now()).total_seconds() / 3600
+        hours_left = (drop_time - now()).total_seconds() / 3600
 
-        color = "🔴" if hours_left < 1 else "🟡" if hours_left < 3 else "🟢"
+        if hours_left < 1:
+            color = "🔴"
+        elif hours_left < 3:
+            color = "🟡"
+        else:
+            color = "🟢"
 
         result.append(
             (
-                drop,
+                drop_time,
                 f"{color} {hid} | {server} | {'🛡' if safe else '❌'} | "
-                f"{drop.strftime('%H:%M')} | {hours_left:.1f}ч\n"
+                f"{drop_time.strftime('%H:%M')} | {hours_left:.1f}ч\n"
                 f"🕒 {created}"
             )
         )
@@ -137,14 +147,15 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cur.execute("DELETE FROM houses WHERE id=?", (hid,))
         conn.commit()
 
-        await q.edit_message_text(f"❌ Удалён {hid}")
+        await q.edit_message_text(f"❌ Удалён дом {hid}")
 
 # ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🏠 Arizona RP Bot (FINAL)\n\n"
+        "🏠 Arizona RP Tracker (FINAL V4)\n\n"
         "Формат:\n"
-        "1234 14 со страховкой winslow\n\n"
+        "1234 20 со страховкой winslow\n"
+        "1660 2 без страховки mesa\n\n"
         "/list"
     )
 
