@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("TOKEN")
 records = []
 
 SERVERS = {
@@ -19,26 +19,27 @@ SERVERS = {
 
 def calc_drop(start_time, payday, insured):
     current = datetime.strptime(start_time, "%H:%M")
+    now = datetime.now()
+    current = current.replace(year=now.year, month=now.month, day=now.day)
     p = payday
 
     while True:
         current += timedelta(hours=1)
         p -= 1 if insured else 2
 
-        if insured:
-            if p == 2:
-                current += timedelta(hours=1)
-                return current.strftime("%H:%M")
-        else:
-            if p <= 1:
-                return current.strftime("%H:%M")
+        if insured and p == 2:
+            current += timedelta(hours=1)
+            return current
+        elif not insured and p <= 1:
+            return current
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Используй:\n"
-        "/add 05:00 321 5 yes 07\n\n"
-        "формат:\nвремя id payday yes/no сервер"
+        "/add 05:00 321 5 yes 14\n"
+        "/list\n"
+        "/delete 321\n"
+        "/edit 321 06:00 7 no 14"
     )
 
 
@@ -47,25 +48,23 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         start_time, house_id, payday, insurance, server = context.args
         payday = int(payday)
         insured = insurance.lower() == "yes"
+        drop_dt = calc_drop(start_time, payday, insured)
 
-        drop = calc_drop(start_time, payday, insured)
-
-        record = {
-            "drop": drop,
+        records.append({
             "house": house_id,
             "payday": payday,
             "insured": insured,
-            "server": server
-        }
-        records.append(record)
+            "server": server,
+            "drop": drop_dt
+        })
 
         await update.message.reply_text(
-            f"✅ Дом {house_id} добавлен\n"
-            f"🌍 {SERVERS.get(server, server)}\n"
-            f"⏰ Слёт: {drop}"
+            f"✅ {house_id}\n"
+            f"🌍 {SERVERS.get(server)}\n"
+            f"⏰ {drop_dt.strftime('%d.%m %H:%M')}"
         )
-    except Exception as e:
-        await update.message.reply_text("Пример: /add 05:00 321 5 yes 07")
+    except:
+        await update.message.reply_text("Ошибка. Пример: /add 05:00 321 5 yes 14")
 
 
 async def delete_record(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -73,45 +72,50 @@ async def delete_record(update: Update, context: ContextTypes.DEFAULT_TYPE):
         house_id = context.args[0]
         global records
         records = [r for r in records if r['house'] != house_id]
-        await update.message.reply_text(f"🗑 Дом {house_id} удалён")
+        await update.message.reply_text(f"🗑 Удалён {house_id}")
     except:
-        await update.message.reply_text("Пример: /delete 321")
+        await update.message.reply_text("/delete 321")
 
 
 async def edit_record(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         house_id, start_time, payday, insurance, server = context.args
         payday = int(payday)
-        insured = insurance.lower() == 'yes'
+        insured = insurance.lower() == "yes"
 
         for r in records:
             if r['house'] == house_id:
-                r['drop'] = calc_drop(start_time, payday, insured)
                 r['payday'] = payday
                 r['insured'] = insured
                 r['server'] = server
-                await update.message.reply_text(f"✏️ Дом {house_id} обновлён")
+                r['drop'] = calc_drop(start_time, payday, insured)
+                await update.message.reply_text(f"✏️ Обновлён {house_id}")
                 return
 
         await update.message.reply_text("Дом не найден")
     except:
-        await update.message.reply_text("Пример: /edit 321 05:00 7 yes 14")
+        await update.message.reply_text("/edit 321 05:00 5 yes 14")
 
 
 async def list_records(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not records:
-        await update.message.reply_text("Список пуст")
+        await update.message.reply_text("Пусто")
         return
 
-    sorted_records = sorted(records, key=lambda x: x['drop'])
-    msg = "🔥 Список слётов\n\n"
+    grouped = {}
+    for r in records:
+        grouped.setdefault(r['server'], []).append(r)
 
-    for r in sorted_records:
-        msg += (
-            f"⏰ {r['drop']} | 🏠 {r['house']}\n"
-            f"🌍 {SERVERS.get(r['server'], r['server'])}\n"
-            f"🛡 {'Страховка' if r['insured'] else 'Без страховки'}\n\n"
-        )
+    msg = "🔥 СЛЁТЫ\n\n"
+
+    for server in sorted(grouped.keys()):
+        msg += f"🌍 {server}: {SERVERS.get(server)}\n"
+        for r in sorted(grouped[server], key=lambda x: x['drop']):
+            msg += (
+                f"⏰ {r['drop'].strftime('%d.%m %H:%M')} | 🏠 {r['house']}\n"
+                f"🛡 {'Страховка' if r['insured'] else 'Без'}\n"
+            )
+        msg += "\n"
 
     await update.message.reply_text(msg)
 
