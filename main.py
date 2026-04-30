@@ -1,4 +1,5 @@
 import sqlite3
+import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -7,7 +8,8 @@ from telegram.ext import (
     MessageHandler,
     ContextTypes,
     filters,
-    CallbackQueryHandler
+    CallbackQueryHandler,
+    JobQueue
 )
 import os
 
@@ -28,18 +30,6 @@ SERVERS = [
     "Drake", "Space"
 ]
 
-def server_keyboard():
-    kb = []
-    row = []
-    for i, s in enumerate(SERVERS, 1):
-        row.append(InlineKeyboardButton(s, callback_data=f"srv_{s}"))
-        if i % 3 == 0:
-            kb.append(row)
-            row = []
-    if row:
-        kb.append(row)
-    return InlineKeyboardMarkup(kb)
-
 # ---------- DB ----------
 conn = sqlite3.connect("houses.db", check_same_thread=False)
 cur = conn.cursor()
@@ -55,7 +45,7 @@ CREATE TABLE IF NOT EXISTS houses (
 """)
 conn.commit()
 
-# ---------- TIME LOGIC (FIXED ROUND TO NEXT HOUR) ----------
+# ---------- TIME CALC (ROUND TO NEXT HOUR) ----------
 def calc_time(payday, safe):
     base = now_msk()
 
@@ -66,7 +56,7 @@ def calc_time(payday, safe):
 
     t = base + timedelta(hours=payday)
 
-    # 🔥 округление до следующего часа :00
+    # округление до следующего часа
     if t.minute > 0 or t.second > 0:
         t = t.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     else:
@@ -107,8 +97,12 @@ def schedule(app, chat_id, hid, payday, safe):
 
 # ---------- RESTORE AFTER RESTART ----------
 async def restore(app):
+    await asyncio.sleep(2)
+
     cur.execute("SELECT * FROM houses")
-    for hid, payday, safe, server, chat_id in cur.fetchall():
+    rows = cur.fetchall()
+
+    for hid, payday, safe, server, chat_id in rows:
         schedule(app, chat_id, hid, payday, safe)
 
 # ---------- PARSER ----------
@@ -186,7 +180,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = query.message.chat.id
     data = query.data
 
-    # ❌ DELETE
     if data.startswith("del_"):
         hid = int(data.split("_")[1])
 
@@ -195,7 +188,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.edit_message_text(f"❌ Дом {hid} удалён")
 
-    # ✏️ EDIT
     elif data.startswith("edit_"):
         hid = int(data.split("_")[1])
 
@@ -203,19 +195,17 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
 
         await query.edit_message_text(
-            f"✏️ Дом {hid} удалён.\nОтправь его заново с новыми параметрами."
+            f"✏️ Дом {hid} удалён.\nОтправь его заново."
         )
-
-    # 🖥 SERVER SELECT
-    elif data.startswith("srv_"):
-        server = data.split("_", 1)[1]
-        await query.edit_message_text(f"🖥 Сервер выбран: {server}")
 
 # ---------- SERVER MENU ----------
 async def server_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = [[InlineKeyboardButton(s, callback_data=f"srv_{s}") for s in SERVERS[i:i+3]]
+          for i in range(0, len(SERVERS), 3)]
+
     await update.message.reply_text(
         "Выбери сервер:",
-        reply_markup=server_keyboard()
+        reply_markup=InlineKeyboardMarkup(kb)
     )
 
 # ---------- START ----------
@@ -224,13 +214,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🏠 Бот домов\n\n"
         "Формат:\n"
         "258 17 со страховкой Mesa\n\n"
-        "/server — выбрать сервер\n"
-        "/list — список домов"
+        "/list — список"
     )
 
-# ---------- MAIN ----------
+# ---------- MAIN (FIXED JOBQUEUE) ----------
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
+
+    # 🔥 FIX JOBQUEUE (самое важное)
+    job_queue = JobQueue()
+    job_queue.set_application(app)
+    job_queue.start()
+    app.job_queue = job_queue
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("list", list_houses))
