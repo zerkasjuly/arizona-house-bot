@@ -5,6 +5,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 TOKEN = os.getenv("BOT_TOKEN")
 records = []
+job_refs = {}
 
 SERVERS = {
     "01": "Phoenix", "02": "Tucson", "03": "Scottdale", "04": "Chandler",
@@ -21,23 +22,41 @@ def calc_drop(start_time, payday, insured):
     now = datetime.now()
     current = datetime.strptime(start_time, "%H:%M").replace(year=now.year, month=now.month, day=now.day)
     p = payday
-
     while True:
         current += timedelta(hours=1)
         p -= 1 if insured else 2
-
         if insured and p == 2:
             return current + timedelta(hours=1)
         if not insured and p <= 1:
             return current
 
 
+async def notify(context):
+    data = context.job.data
+    await context.bot.send_message(context.job.chat_id,
+        f"⚠️ Дом №{data['house']} на сервере {SERVERS.get(data['server'])} слетает через {data['mins']} минут")
+
+
+async def cleanup(context):
+    house = context.job.data
+    global records
+    records = [r for r in records if r['house'] != house]
+
+
+def schedule_notifications(app, chat_id, house_id, server, drop):
+    for mins in [10, 5]:
+        when = (drop - timedelta(minutes=mins) - datetime.now()).total_seconds()
+        if when > 0:
+            app.job_queue.run_once(notify, when=when, chat_id=chat_id,
+                data={'house': house_id, 'server': server, 'mins': mins})
+
+    cleanup_time = (drop - datetime.now()).total_seconds()
+    if cleanup_time > 0:
+        app.job_queue.run_once(cleanup, when=cleanup_time, data=house_id)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Команды:\n"
-        "/add (можно много строк)\n"
-        "/list\n/delete ID\n/edit ID время payday yes/no сервер"
-    )
+    await update.message.reply_text("/add, /list, /delete, /edit")
 
 
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -52,6 +71,8 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
             insured = insurance.lower() == 'yes'
             drop = calc_drop(start_time, payday, insured)
 
+            schedule_notifications(context.application, update.effective_chat.id, house_id, server, drop)
+
             records.append({
                 'house': house_id,
                 'payday': payday,
@@ -60,7 +81,8 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'drop': drop
             })
 
-            result.append(f"✅ {house_id} → {drop.strftime('%d.%m %H:%M')}")
+            alt = f" или {(drop + timedelta(hours=1)).strftime('%H:%M')}" if insured else ""
+            result.append(f"✅ {house_id} → {drop.strftime('%d.%m %H:%M')}{alt}")
         except:
             result.append(f"❌ Ошибка: {line}")
 
@@ -81,12 +103,9 @@ async def edit_record(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for r in records:
         if r['house'] == house_id:
-            r.update({
-                'payday': payday,
-                'insured': insured,
-                'server': server,
-                'drop': calc_drop(start_time, payday, insured)
-            })
+            drop = calc_drop(start_time, payday, insured)
+            schedule_notifications(context.application, update.effective_chat.id, house_id, server, drop)
+            r.update({'payday': payday, 'insured': insured, 'server': server, 'drop': drop})
             await update.message.reply_text(f"✏️ Обновлён {house_id}")
             return
 
@@ -101,14 +120,11 @@ async def list_records(update: Update, context: ContextTypes.DEFAULT_TYPE):
         grouped.setdefault(r['server'], []).append(r)
 
     msg = "🔥 Список слётов\n\n"
-
     for server, houses in grouped.items():
         msg += f"🌍 {SERVERS.get(server)} ({server})\n"
         for r in houses:
-            msg += (
-                f"⏰ {r['drop'].strftime('%d.%m %H:%M')} | 🏠 {r['house']}\n"
-                f"🛡 {'Страховка' if r['insured'] else 'Без страховки'}\n\n"
-            )
+            alt = f" / {(r['drop'] + timedelta(hours=1)).strftime('%H:%M')}?" if r['insured'] else ""
+            msg += f"⏰ {r['drop'].strftime('%d.%m %H:%M')}{alt} | 🏠 {r['house']}\n🛡 {'Страховка' if r['insured'] else 'Без страховки'}\n\n"
 
     await update.message.reply_text(msg)
 
