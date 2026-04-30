@@ -27,19 +27,25 @@ CREATE TABLE IF NOT EXISTS houses (
 """)
 conn.commit()
 
-# ---------- ПРАВИЛО СЛЁТА ----------
-# safe / no safe = разные "цели"
-TARGET_SAFE = 16
-TARGET_NOSAFE = 10
+# ---------- МОДЕЛЬ СЛЁТА ----------
+# чем больше target — тем дольше до слёта
+SAFE_TARGET = 30
+NOSAFE_TARGET = 18
 
 # ---------- CORE ----------
-def calc_remaining(payday: int, safe: int):
-    target = TARGET_SAFE if safe else TARGET_NOSAFE
-    return target - payday
+def progress(payday: int, safe: int):
+    target = SAFE_TARGET if safe else NOSAFE_TARGET
 
-def calc_visual_slot(remaining: int):
-    # просто отображение, НЕ время
-    return f"{remaining} payday до слёта"
+    # нормализуем от 0 до 1 (ВАЖНО)
+    return min(payday / target, 1.0), target - payday
+
+
+def status_bar(p):
+    if p >= 0.8:
+        return "🔴"
+    elif p >= 0.5:
+        return "🟡"
+    return "🟢"
 
 # ---------- PARSER ----------
 async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -63,10 +69,11 @@ async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
             """, (hid, payday, safe, server, chat_id))
             conn.commit()
 
-            remaining = calc_remaining(payday, safe)
+            prog, left = progress(payday, safe)
 
             added.append(
-                f"🏠 {hid} | {server} | {remaining} payday до слёта"
+                f"🏠 {hid} | {server} | {status_bar(prog)} | "
+                f"{left} до слёта"
             )
 
         except:
@@ -89,18 +96,14 @@ async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     items = []
 
     for hid, payday, safe, server, _ in rows:
-        remaining = calc_remaining(payday, safe)
+        prog, left = progress(payday, safe)
 
-        if remaining <= 0:
-            color = "🔴"
-        elif remaining <= 3:
-            color = "🟡"
-        else:
-            color = "🟢"
+        color = status_bar(prog)
 
         items.append(
-            f"{color} {hid} | {server} | {'🛡' if safe else '❌'} | "
-            f"{remaining} payday до слёта"
+            f"{color} {hid} | {server} | "
+            f"{'🛡' if safe else '❌'} | "
+            f"{left} payday до слёта"
         )
 
     await update.message.reply_text("🏠 Дома:\n\n" + "\n".join(items))
@@ -121,7 +124,7 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🏠 STATE BOT FINAL\n\n"
+        "🏠 FINAL STATE MODEL V2\n\n"
         "Формат:\n"
         "1234 13 со страховкой winslow\n\n"
         "/list"
