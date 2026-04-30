@@ -18,7 +18,7 @@ cur = conn.cursor()
 
 cur.execute("""
 CREATE TABLE IF NOT EXISTS houses (
-    id INTEGER,
+    id INTEGER PRIMARY KEY,
     payday INTEGER,
     safe INTEGER,
     server TEXT,
@@ -27,16 +27,19 @@ CREATE TABLE IF NOT EXISTS houses (
 """)
 conn.commit()
 
-# ---------- CORE LOGIC ----------
-def calc_slot(payday: int, safe: int):
-    base = 6 if safe else 20
-    return f"{(base - payday) % 24:02d}:00"
+# ---------- ПРАВИЛО СЛЁТА ----------
+# safe / no safe = разные "цели"
+TARGET_SAFE = 16
+TARGET_NOSAFE = 10
 
-# ---------- TIME LEFT (для /list) ----------
-def fake_hours_left(payday: int, safe: int):
-    # чисто визуал, без datetime багов
-    base = 6 if safe else 20
-    return abs(base - payday)
+# ---------- CORE ----------
+def calc_remaining(payday: int, safe: int):
+    target = TARGET_SAFE if safe else TARGET_NOSAFE
+    return target - payday
+
+def calc_visual_slot(remaining: int):
+    # просто отображение, НЕ время
+    return f"{remaining} payday до слёта"
 
 # ---------- PARSER ----------
 async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -55,15 +58,16 @@ async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
             safe = 1 if "со страховкой" in line else 0
             server = parts[-1].capitalize()
 
-            cur.execute(
-                "REPLACE INTO houses VALUES (?, ?, ?, ?, ?)",
-                (hid, payday, safe, server, chat_id)
-            )
+            cur.execute("""
+                REPLACE INTO houses VALUES (?, ?, ?, ?, ?)
+            """, (hid, payday, safe, server, chat_id))
             conn.commit()
 
-            slot = calc_slot(payday, safe)
+            remaining = calc_remaining(payday, safe)
 
-            added.append(f"🏠 {hid} | {server} | {slot}")
+            added.append(
+                f"🏠 {hid} | {server} | {remaining} payday до слёта"
+            )
 
         except:
             pass
@@ -85,27 +89,21 @@ async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     items = []
 
     for hid, payday, safe, server, _ in rows:
-        slot = calc_slot(payday, safe)
-        hours = fake_hours_left(payday, safe)
+        remaining = calc_remaining(payday, safe)
 
-        # цвет
-        if hours <= 2:
+        if remaining <= 0:
             color = "🔴"
-        elif hours <= 6:
+        elif remaining <= 3:
             color = "🟡"
         else:
             color = "🟢"
 
         items.append(
-            (hours,
-             f"{color} {hid} | {server} | {'🛡' if safe else '❌'} | {slot} | ~{hours}h")
+            f"{color} {hid} | {server} | {'🛡' if safe else '❌'} | "
+            f"{remaining} payday до слёта"
         )
 
-    items.sort(key=lambda x: x[0])
-
-    text = "🏠 Дома:\n\n" + "\n".join(i[1] for i in items)
-
-    await update.message.reply_text(text)
+    await update.message.reply_text("🏠 Дома:\n\n" + "\n".join(items))
 
 # ---------- DELETE ----------
 async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -115,7 +113,7 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cur.execute("DELETE FROM houses WHERE id=?", (hid,))
         conn.commit()
 
-        await update.message.reply_text(f"❌ Удалён дом {hid}")
+        await update.message.reply_text(f"❌ Удалён {hid}")
 
     except:
         await update.message.reply_text("Используй: /del 123")
@@ -123,10 +121,9 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🏠 FINAL ARIZONA BOT\n\n"
+        "🏠 STATE BOT FINAL\n\n"
         "Формат:\n"
-        "1234 20 со страховкой winslow\n"
-        "1660 2 без страховки mesa\n\n"
+        "1234 13 со страховкой winslow\n\n"
         "/list"
     )
 
