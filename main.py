@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("TOKEN")
 records = []
 
 SERVERS = {
@@ -68,6 +68,36 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пример: /add 05:00 321 5 yes 07")
 
 
+async def delete_record(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        house_id = context.args[0]
+        global records
+        records = [r for r in records if r['house'] != house_id]
+        await update.message.reply_text(f"🗑 Дом {house_id} удалён")
+    except:
+        await update.message.reply_text("Пример: /delete 321")
+
+
+async def edit_record(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        house_id, start_time, payday, insurance, server = context.args
+        payday = int(payday)
+        insured = insurance.lower() == 'yes'
+
+        for r in records:
+            if r['house'] == house_id:
+                r['drop'] = calc_drop(start_time, payday, insured)
+                r['payday'] = payday
+                r['insured'] = insured
+                r['server'] = server
+                await update.message.reply_text(f"✏️ Дом {house_id} обновлён")
+                return
+
+        await update.message.reply_text("Дом не найден")
+    except:
+        await update.message.reply_text("Пример: /edit 321 05:00 7 yes 14")
+
+
 async def list_records(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not records:
         await update.message.reply_text("Список пуст")
@@ -91,6 +121,8 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("add", add))
     app.add_handler(CommandHandler("list", list_records))
+    app.add_handler(CommandHandler("delete", delete_record))
+    app.add_handler(CommandHandler("edit", edit_record))
     app.run_polling()
 
 
