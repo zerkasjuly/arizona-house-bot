@@ -8,8 +8,7 @@ from telegram.ext import (
     MessageHandler,
     ContextTypes,
     filters,
-    CallbackQueryHandler,
-    JobQueue
+    CallbackQueryHandler
 )
 import os
 
@@ -45,7 +44,7 @@ CREATE TABLE IF NOT EXISTS houses (
 """)
 conn.commit()
 
-# ---------- TIME CALC (ROUND TO NEXT HOUR) ----------
+# ---------- TIME CALC ----------
 def calc_time(payday, safe):
     base = now_msk()
 
@@ -73,7 +72,7 @@ async def notify(context: ContextTypes.DEFAULT_TYPE):
         f"🏠 Дом {hid}\n{text}"
     )
 
-# ---------- SCHEDULE ----------
+# ---------- SCHEDULE (SAFE VERSION) ----------
 def schedule(app, chat_id, hid, payday, safe):
     drop = calc_time(payday, safe)
     seconds = (drop - now_msk()).total_seconds()
@@ -217,15 +216,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/list — список"
     )
 
-# ---------- MAIN (FIXED JOBQUEUE) ----------
+# ---------- MAIN (CLEAN FIX) ----------
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
-
-    # 🔥 FIX JOBQUEUE (самое важное)
-    job_queue = JobQueue()
-    job_queue.set_application(app)
-    job_queue.start()
-    app.job_queue = job_queue
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("list", list_houses))
