@@ -1,18 +1,23 @@
-import sqlite3
 import os
-
-from telegram import Update
+import sqlite3
+from datetime import datetime, timedelta
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters
 )
 
 TOKEN = os.getenv("BOT_TOKEN")
 
-# ---------- DB ----------
+# ---------------- DB ----------------
 conn = sqlite3.connect("houses.db", check_same_thread=False)
 cur = conn.cursor()
 
@@ -21,126 +26,167 @@ CREATE TABLE IF NOT EXISTS houses (
     id INTEGER PRIMARY KEY,
     payday INTEGER,
     safe INTEGER,
-    server TEXT,
-    chat_id INTEGER
+    server TEXT
 )
 """)
 conn.commit()
 
-# ---------- МОДЕЛЬ СЛЁТА ----------
-# чем больше target — тем дольше до слёта
-SAFE_TARGET = 30
-NOSAFE_TARGET = 18
 
-# ---------- CORE ----------
-def progress(payday: int, safe: int):
-    target = SAFE_TARGET if safe else NOSAFE_TARGET
-
-    # нормализуем от 0 до 1 (ВАЖНО)
-    return min(payday / target, 1.0), target - payday
+# ---------------- TIME ----------------
+def now():
+    return datetime.now()
 
 
-def status_bar(p):
-    if p >= 0.8:
+# ---------------- SIMULATION ----------------
+def simulate_hours(payday: int, safe: int) -> int:
+    hours = 0
+    p = payday
+
+    if safe:
+        while p > 1:
+            p -= 1
+            hours += 1
+        hours += 1
+    else:
+        while p > 0:
+            p -= 2
+            hours += 1
+
+    return hours
+
+
+def drop_time(payday, safe):
+    return now() + timedelta(hours=simulate_hours(payday, safe))
+
+
+def color(hours):
+    if hours <= 2:
         return "🔴"
-    elif p >= 0.5:
+    if hours <= 5:
         return "🟡"
     return "🟢"
 
-# ---------- PARSER ----------
+
+# ---------------- PARSER ----------------
 async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    chat_id = update.effective_chat.id
+    text = update.message.text.lower().split()
 
-    added = []
-
-    for line in text.split("\n"):
+    if len(text) >= 4:
         try:
-            parts = line.split()
+            hid = int(text[0])
+            payday = int(text[1])
+            server = text[-1]
+            safe = 1 if "со" in " ".join(text[2:-1]) else 0
 
-            hid = int(parts[0])
-            payday = int(parts[1])
-
-            safe = 1 if "со страховкой" in line else 0
-            server = parts[-1].capitalize()
-
-            cur.execute("""
-                REPLACE INTO houses VALUES (?, ?, ?, ?, ?)
-            """, (hid, payday, safe, server, chat_id))
+            cur.execute(
+                "REPLACE INTO houses VALUES (?, ?, ?, ?)",
+                (hid, payday, safe, server)
+            )
             conn.commit()
 
-            prog, left = progress(payday, safe)
+            dt = drop_time(payday, safe)
 
-            added.append(
-                f"🏠 {hid} | {server} | {status_bar(prog)} | "
-                f"{left} до слёта"
+            await update.message.reply_text(
+                f"🏠 {hid} | {server}\n⏰ слёт: {dt.strftime('%H:%M')}"
             )
-
         except:
             pass
 
-    if added:
-        await update.message.reply_text("✅ Добавлено:\n\n" + "\n".join(added))
 
-# ---------- LIST ----------
+# ---------------- BUTTONS ----------------
+def keyboard(hid):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("➕", callback_data=f"add_{hid}"),
+            InlineKeyboardButton("➖", callback_data=f"sub_{hid}"),
+            InlineKeyboardButton("🗑", callback_data=f"del_{hid}")
+        ]
+    ])
+
+
 async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-
-    cur.execute("SELECT * FROM houses WHERE chat_id=?", (chat_id,))
+    cur.execute("SELECT * FROM houses")
     rows = cur.fetchall()
 
     if not rows:
         await update.message.reply_text("Пусто")
         return
 
-    items = []
+    text = "🏠 Дома:\n\n"
 
-    for hid, payday, safe, server, _ in rows:
-        prog, left = progress(payday, safe)
+    for hid, payday, safe, server in rows:
+        dt = drop_time(payday, safe)
+        hours_left = (dt - now()).total_seconds() / 3600
 
-        color = status_bar(prog)
-
-        items.append(
-            f"{color} {hid} | {server} | "
-            f"{'🛡' if safe else '❌'} | "
-            f"{left} payday до слёта"
+        text += (
+            f"{color(hours_left)} {hid} | {server} → {dt.strftime('%H:%M')}\n"
+            f"/"
         )
 
-    await update.message.reply_text("🏠 Дома:\n\n" + "\n".join(items))
+        await update.message.reply_text(text, reply_markup=keyboard(hid))
 
-# ---------- DELETE ----------
-async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        hid = int(context.args[0])
 
+# ---------------- CALLBACKS ----------------
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    action, hid = q.data.split("_")
+    hid = int(hid)
+
+    cur.execute("SELECT payday, safe FROM houses WHERE id=?", (hid,))
+    row = cur.fetchone()
+
+    if not row:
+        return
+
+    payday, safe = row
+
+    if action == "add":
+        payday += 1
+    elif action == "sub":
+        payday -= 1
+    elif action == "del":
         cur.execute("DELETE FROM houses WHERE id=?", (hid,))
         conn.commit()
+        await q.edit_message_text("Удалено")
+        return
 
-        await update.message.reply_text(f"❌ Удалён {hid}")
+    cur.execute(
+        "UPDATE houses SET payday=? WHERE id=?",
+        (payday, hid)
+    )
+    conn.commit()
 
-    except:
-        await update.message.reply_text("Используй: /del 123")
+    dt = drop_time(payday, safe)
 
-# ---------- START ----------
+    await q.edit_message_text(
+        f"🏠 {hid}\n⏰ {dt.strftime('%H:%M')}",
+        reply_markup=keyboard(hid)
+    )
+
+
+# ---------------- START ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🏠 FINAL STATE MODEL V2\n\n"
-        "Формат:\n"
-        "1234 13 со страховкой winslow\n\n"
+        "🏠 V2 BOT\n\n"
+        "формат:\n"
+        "1234 10 со страховкой mesa\n\n"
         "/list"
     )
 
-# ---------- MAIN ----------
+
+# ---------------- MAIN ----------------
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("list", list_houses))
-    app.add_handler(CommandHandler("del", delete))
-
+    app.add_handler(CallbackQueryHandler(buttons))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, parser))
 
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
