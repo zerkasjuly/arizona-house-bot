@@ -72,7 +72,7 @@ async def notify(context: ContextTypes.DEFAULT_TYPE):
         f"🏠 Дом {hid}\n{text}"
     )
 
-# ---------- SCHEDULE (SAFE VERSION) ----------
+# ---------- SCHEDULE ----------
 def schedule(app, chat_id, hid, payday, safe):
     drop = calc_time(payday, safe)
     seconds = (drop - now_msk()).total_seconds()
@@ -142,7 +142,7 @@ async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✅ Добавлено:\n\n" + "\n".join(f"🏠 {a}" for a in added)
         )
 
-# ---------- LIST ----------
+# ---------- LIST (SORTED FIX) ----------
 async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
@@ -153,12 +153,19 @@ async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пусто")
         return
 
-    text = "🏠 Дома:\n\n"
-    keyboard = []
+    data = []
 
     for hid, payday, safe, server, _ in rows:
         drop = calc_time(payday, safe)
+        data.append((drop, hid, safe, server))
 
+    # 🔥 сортировка по ближайшему слёту
+    data.sort(key=lambda x: x[0])
+
+    text = "🏠 Дома (по ближайшему слёту):\n\n"
+    keyboard = []
+
+    for drop, hid, safe, server in data:
         text += f"{hid} | {server} | {'🛡' if safe else '❌'} | {drop.strftime('%H:%M')}\n"
 
         keyboard.append([
@@ -213,10 +220,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🏠 Бот домов\n\n"
         "Формат:\n"
         "258 17 со страховкой Mesa\n\n"
-        "/list — список"
+        "/list — список домов"
     )
 
-# ---------- MAIN (CLEAN FIX) ----------
+# ---------- MAIN ----------
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
