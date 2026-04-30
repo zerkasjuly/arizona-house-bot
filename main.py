@@ -1,22 +1,16 @@
 import sqlite3
-from datetime import datetime, timedelta
 import os
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     ContextTypes,
     filters
 )
 
 TOKEN = os.getenv("BOT_TOKEN")
-
-# ---------- TIME ----------
-def now():
-    return datetime.utcnow() + timedelta(hours=3)
 
 # ---------- DB ----------
 conn = sqlite3.connect("houses.db", check_same_thread=False)
@@ -28,38 +22,21 @@ CREATE TABLE IF NOT EXISTS houses (
     payday INTEGER,
     safe INTEGER,
     server TEXT,
-    chat_id INTEGER,
-    created_at TEXT
+    chat_id INTEGER
 )
 """)
 conn.commit()
 
-# ---------- BASE SLOTS ----------
-SAFE_BASE = 6   # слёт safe
-NOSAFE_BASE = 20  # слёт no safe
+# ---------- CORE LOGIC ----------
+def calc_slot(payday: int, safe: int):
+    base = 6 if safe else 20
+    return f"{(base - payday) % 24:02d}:00"
 
-# ---------- CORE LOGIC (NO LIMITS, NO TABLES) ----------
-def calc_time(payday: int, safe: int):
-    base = SAFE_BASE if safe else NOSAFE_BASE
-
-    # просто сдвиг назад
-    hour = (base - payday) % 24
-
-    return f"{hour:02d}:00"
-
-# ---------- REAL TIME LEFT (for /list) ----------
-def time_left(payday: int, safe: int):
-    base = SAFE_BASE if safe else NOSAFE_BASE
-
-    target_hour = (base - payday) % 24
-
-    n = now()
-    candidate = n.replace(hour=target_hour, minute=0, second=0, microsecond=0)
-
-    if candidate < n:
-        candidate += timedelta(days=1)
-
-    return candidate
+# ---------- TIME LEFT (для /list) ----------
+def fake_hours_left(payday: int, safe: int):
+    # чисто визуал, без datetime багов
+    base = 6 if safe else 20
+    return abs(base - payday)
 
 # ---------- PARSER ----------
 async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -78,17 +55,15 @@ async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
             safe = 1 if "со страховкой" in line else 0
             server = parts[-1].capitalize()
 
-            created = now().strftime("%d.%m %H:%M")
-
-            cur.execute("""
-                REPLACE INTO houses VALUES (?, ?, ?, ?, ?, ?)
-            """, (hid, payday, safe, server, chat_id, created))
-
+            cur.execute(
+                "REPLACE INTO houses VALUES (?, ?, ?, ?, ?)",
+                (hid, payday, safe, server, chat_id)
+            )
             conn.commit()
 
-            t = calc_time(payday, safe)
+            slot = calc_slot(payday, safe)
 
-            added.append(f"🏠 {hid} | {server} | {t}")
+            added.append(f"🏠 {hid} | {server} | {slot}")
 
         except:
             pass
@@ -107,52 +82,48 @@ async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пусто")
         return
 
-    result = []
+    items = []
 
-    for hid, payday, safe, server, _, created in rows:
-        drop_time = time_left(payday, safe)
+    for hid, payday, safe, server, _ in rows:
+        slot = calc_slot(payday, safe)
+        hours = fake_hours_left(payday, safe)
 
-        hours_left = (drop_time - now()).total_seconds() / 3600
-
-        if hours_left < 1:
+        # цвет
+        if hours <= 2:
             color = "🔴"
-        elif hours_left < 3:
+        elif hours <= 6:
             color = "🟡"
         else:
             color = "🟢"
 
-        result.append(
-            (
-                drop_time,
-                f"{color} {hid} | {server} | {'🛡' if safe else '❌'} | "
-                f"{drop_time.strftime('%H:%M')} | {hours_left:.1f}ч\n"
-                f"🕒 {created}"
-            )
+        items.append(
+            (hours,
+             f"{color} {hid} | {server} | {'🛡' if safe else '❌'} | {slot} | ~{hours}h")
         )
 
-    result.sort(key=lambda x: x[0])
+    items.sort(key=lambda x: x[0])
 
-    text = "🏠 Дома:\n\n" + "\n\n".join(r[1] for r in result)
+    text = "🏠 Дома:\n\n" + "\n".join(i[1] for i in items)
 
     await update.message.reply_text(text)
 
 # ---------- DELETE ----------
-async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    if q.data.startswith("del_"):
-        hid = int(q.data.split("_")[1])
+async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        hid = int(context.args[0])
 
         cur.execute("DELETE FROM houses WHERE id=?", (hid,))
         conn.commit()
 
-        await q.edit_message_text(f"❌ Удалён дом {hid}")
+        await update.message.reply_text(f"❌ Удалён дом {hid}")
+
+    except:
+        await update.message.reply_text("Используй: /del 123")
 
 # ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🏠 Arizona RP Tracker (FINAL V4)\n\n"
+        "🏠 FINAL ARIZONA BOT\n\n"
         "Формат:\n"
         "1234 20 со страховкой winslow\n"
         "1660 2 без страховки mesa\n\n"
@@ -165,9 +136,9 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("list", list_houses))
+    app.add_handler(CommandHandler("del", delete))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, parser))
-    app.add_handler(CallbackQueryHandler(buttons))
 
     app.run_polling()
 
