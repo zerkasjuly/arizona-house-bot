@@ -39,30 +39,51 @@ CREATE TABLE IF NOT EXISTS houses (
     payday INTEGER,
     safe INTEGER,
     server TEXT,
-    chat_id INTEGER
+    chat_id INTEGER,
+    created_at TEXT
 )
 """)
 conn.commit()
+
+# ---------- ARIZONA LOGIC ----------
+SAFE_TABLE = {
+    16: 15, 15: 16, 14: 17, 13: 18, 12: 19,
+    11: 20, 10: 21, 9: 22, 8: 23,
+    7: 0, 6: 1, 5: 2, 4: 3, 3: 4, 2: 5
+}
+
+NO_SAFE_TABLE = {
+    10: 15, 8: 16, 6: 17, 4: 18, 2: 19
+}
 
 # ---------- TIME CALC ----------
 def calc_time(payday, safe):
     base = now_msk()
 
-    if safe:
-        payday -= 1
+    table = SAFE_TABLE if safe else NO_SAFE_TABLE
 
-    payday = max(payday, 1)
+    keys = sorted(table.keys(), reverse=True)
 
-    t = base + timedelta(hours=payday)
+    selected = None
+    for k in keys:
+        if payday >= k:
+            selected = k
+            break
 
-    if t.minute > 0 or t.second > 0:
-        t = t.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-    else:
-        t = t.replace(minute=0, second=0, microsecond=0)
+    if selected is None:
+        selected = min(keys)
 
-    return t
+    hour = table[selected]
 
-# ---------- COLOR SYSTEM ----------
+    drop = base.replace(minute=0, second=0, microsecond=0)
+    drop = drop.replace(hour=hour)
+
+    if drop < base:
+        drop += timedelta(days=1)
+
+    return drop
+
+# ---------- COLORS ----------
 def get_color(hours_left):
     if hours_left < 1:
         return "🔴"
@@ -109,7 +130,7 @@ async def restore(app):
     cur.execute("SELECT * FROM houses")
     rows = cur.fetchall()
 
-    for hid, payday, safe, server, chat_id in rows:
+    for hid, payday, safe, server, chat_id, created_at in rows:
         schedule(app, chat_id, hid, payday, safe)
 
 # ---------- PARSER ----------
@@ -131,9 +152,11 @@ async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
             safe = 1 if "со страховкой" in line else 0
             server = parts[-1].capitalize()
 
+            created_at = now_msk().strftime("%d.%m %H:%M")
+
             cur.execute("""
-                REPLACE INTO houses VALUES (?, ?, ?, ?, ?)
-            """, (hid, payday, safe, server, chat_id))
+                REPLACE INTO houses VALUES (?, ?, ?, ?, ?, ?)
+            """, (hid, payday, safe, server, chat_id, created_at))
 
             schedule(context.application, chat_id, hid, payday, safe)
 
@@ -150,7 +173,7 @@ async def parser(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✅ Добавлено:\n\n" + "\n".join(f"🏠 {a}" for a in added)
         )
 
-# ---------- LIST (COLOR SYSTEM) ----------
+# ---------- LIST (FINAL FORMAT FIX) ----------
 async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
@@ -163,33 +186,34 @@ async def list_houses(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = []
 
-    for hid, payday, safe, server, _ in rows:
+    for hid, payday, safe, server, _, created_at in rows:
         drop = calc_time(payday, safe)
 
         now = now_msk()
         hours_left = (drop - now).total_seconds() / 3600
 
-        data.append((drop, hid, safe, server, hours_left))
+        data.append((drop, hid, safe, server, hours_left, created_at))
 
-    # сортировка по ближайшему слёту
     data.sort(key=lambda x: x[0])
 
     text = "🏠 Дома (по ближайшему слёту):\n\n"
     keyboard = []
 
-    for drop, hid, safe, server, hours_left in data:
+    for drop, hid, safe, server, hours_left, created_at in data:
 
         color = get_color(hours_left)
 
         if hours_left >= 1:
-            time_info = f"⏳ {hours_left:.1f} ч"
+            time_info = f"До слёта {hours_left:.1f} ч"
         else:
-            time_info = f"⏳ {int(hours_left * 60)} мин"
+            time_info = f"До слёта {int(hours_left * 60)} мин"
 
         text += (
             f"{color} {hid} | {server} | "
             f"{'🛡' if safe else '❌'} | "
-            f"{drop.strftime('%H:%M')} | {time_info}\n"
+            f"{drop.strftime('%H:%M')} | "
+            f"{time_info}\n"
+            f"🕒 Дата записи: {created_at}\n\n"
         )
 
         keyboard.append([
@@ -241,9 +265,9 @@ async def server_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🏠 Бот домов\n\n"
+        "🏠 Бот домов Arizona RP\n\n"
         "Формат:\n"
-        "258 17 со страховкой Mesa\n\n"
+        "123 16 со страховкой Mesa\n\n"
         "/list — список"
     )
 
