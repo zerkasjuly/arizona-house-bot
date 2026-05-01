@@ -76,6 +76,22 @@ def calc_drop(start_time, payday, insured):
             return current, None
 
 
+def current_payday(record):
+    passed = int((now() - record["start"]).total_seconds() // 3600)
+
+    if record["insured"]:
+        left = record["payday"] - passed
+        if left <= 2:
+            return f"{max(left,0)} payday ⚠️ Зона слёта"
+        return f"{left} payday"
+
+    else:
+        left = record["payday"] - passed * 2
+        if left <= 1:
+            return "≤1 payday 🚨"
+        return f"{left} payday"
+
+
 async def notify(context):
     d = context.job.data
 
@@ -109,18 +125,15 @@ def schedule(app, chat_id, house, server, insured, drop, alt):
                     notify,
                     when=sec,
                     chat_id=chat_id,
-                    data={
-                        "house": house,
-                        "server": server,
-                        "type": t
-                    }
+                    data={"house": house, "server": server, "type": t}
                 )
                 jobs[house].append(job)
 
         sec = (alt - now()).total_seconds()
         if sec > 0:
-            job = app.job_queue.run_once(cleanup, when=sec, data=house)
-            jobs[house].append(job)
+            jobs[house].append(
+                app.job_queue.run_once(cleanup, when=sec, data=house)
+            )
 
     else:
         for mins in [10, 5]:
@@ -141,25 +154,25 @@ def schedule(app, chat_id, house, server, insured, drop, alt):
 
         sec = (drop - now()).total_seconds()
         if sec > 0:
-            job = app.job_queue.run_once(cleanup, when=sec, data=house)
-            jobs[house].append(job)
+            jobs[house].append(
+                app.job_queue.run_once(cleanup, when=sec, data=house)
+            )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("/add\n/list\n/edit\n/del\n/gone")
+    await update.message.reply_text("/add /list /edit /del /gone")
 
 
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.replace("/add", "").strip()
     lines = text.split("\n")
-
     out = []
 
     for line in lines:
         try:
             st, house, pay, ins, server = line.split()
-
             insured = ins.lower() == "yes"
+
             drop, alt = calc_drop(st, int(pay), insured)
 
             records.append({
@@ -167,7 +180,9 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "insured": insured,
                 "server": server,
                 "drop": drop,
-                "alt": alt
+                "alt": alt,
+                "start": now(),
+                "payday": int(pay)
             })
 
             schedule(
@@ -180,8 +195,7 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 alt
             )
 
-            extra = f" / {alt.strftime('%H:%M')}?" if alt else ""
-            out.append(f"✅ {house} → {drop.strftime('%d.%m %H:%M')}{extra}")
+            out.append(f"✅ {house} добавлен")
 
         except:
             out.append(f"❌ Ошибка: {line}")
@@ -222,7 +236,9 @@ async def edit_record(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "insured": insured,
                 "server": server,
                 "drop": drop,
-                "alt": alt
+                "alt": alt,
+                "start": now(),
+                "payday": int(pay)
             }
 
             schedule(
@@ -237,8 +253,6 @@ async def edit_record(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await update.message.reply_text(f"✏️ Обновлён {house}")
             return
-
-    await update.message.reply_text("Дом не найден")
 
 
 async def list_records(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -257,12 +271,15 @@ async def list_records(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = "🔥 Список слётов\n\n"
 
     for server, houses in grouped.items():
-        msg += f"🌍 {SERVERS[server]} ({server})\n"
+        msg += f"🌍 {SERVERS[server]} ({server})\n\n"
 
         for r in houses:
+            pd = current_payday(r)
+
             if r["alt"]:
                 msg += (
                     f"🏠 {r['house']}\n"
+                    f"📊 Сейчас: {pd}\n"
                     f"⏰ Возможно: {r['drop'].strftime('%d.%m %H:%M')}\n"
                     f"🚨 Точно: {r['alt'].strftime('%d.%m %H:%M')}\n"
                     f"🛡 Страховка\n\n"
@@ -270,6 +287,7 @@ async def list_records(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 msg += (
                     f"🏠 {r['house']}\n"
+                    f"📊 Сейчас: {pd}\n"
                     f"🚨 Слёт: {r['drop'].strftime('%d.%m %H:%M')}\n"
                     f"🛡 Без страховки\n\n"
                 )
