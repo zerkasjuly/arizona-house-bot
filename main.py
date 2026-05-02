@@ -68,7 +68,7 @@ def calc_drop(start, payday, server, obj_type, insured):
     tax = get_tax(server, obj_type, insured)
     limit = HOUSE_LIMIT if obj_type == "house" else BIZ_LIMIT
 
-    current_tax = limit - payday * tax
+    current_tax = limit - ((payday - 1) * tax)
     current = parse_start(start)
 
     while current_tax < limit:
@@ -153,13 +153,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def add_object(update, context, obj_type):
-    text = update.message.text.split("\n", 1)[1]
+    text = update.message.text.replace("/ah", "").replace("/ab", "").replace("/addhouse", "").replace("/addbiz", "").strip()
     lines = text.split("\n")
     out = []
 
     for line in lines:
         try:
-            st, obj_id, pay, ins, server = line.split()
+            parts = line.split()
+
+            if parts[0].startswith("/"):
+                parts = parts[1:]
+
+            st, obj_id, pay, ins, server = parts
             insured = ins.lower() == "yes"
 
             drop = calc_drop(st, int(pay), server, obj_type, insured)
@@ -174,7 +179,7 @@ async def add_object(update, context, obj_type):
                 "server": server,
                 "drop": drop,
                 "start": parse_start(st),
-                "base_tax": limit - int(pay) * tax
+                "base_tax": limit - ((int(pay) - 1) * tax)
             }
 
             records.append(rec)
@@ -183,7 +188,7 @@ async def add_object(update, context, obj_type):
 
             out.append(f"✅ {obj_id} → {drop.strftime('%d.%m %H:%M')}")
 
-        except:
+        except Exception as e:
             out.append(f"❌ {line}")
 
     await update.message.reply_text("\n".join(out))
