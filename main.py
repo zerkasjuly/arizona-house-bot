@@ -9,6 +9,9 @@ MSK = timezone(timedelta(hours=3))
 records = []
 jobs = {}
 
+HOUSE_LIMIT = 104000
+BIZ_LIMIT = 250000
+
 SERVERS = {
     "07": "Mesa",
     "14": "Winslow",
@@ -16,53 +19,38 @@ SERVERS = {
     "20": "Sun-City"
 }
 
+HOUSE_TAX = {
+    "07": 1000,
+    "14": 1000,
+    "15": 619,
+    "20": 700
+}
 
-# =========================
-# TIME HELPERS
-# =========================
+BIZ_TAX = {
+    "07": 2000,
+    "14": 3500,
+    "15": 1489,
+    "20": 1350
+}
+
 
 def now():
     return datetime.now(MSK)
 
 
-def next_payday(dt):
-    return dt.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+def parse_start(st):
+    dt = datetime.strptime(st, "%H:%M").replace(
+        year=now().year,
+        month=now().month,
+        day=now().day,
+        tzinfo=MSK
+    )
 
+    if dt > now():
+        dt -= timedelta(days=1)
 
-# =========================
-# 🔥 ГЛАВНАЯ ФУНКЦИЯ РАСЧЁТА
-# =========================
+    return dt
 
-def calc_drop_from_find(payday_left: int):
-    """
-    payday_left = число из /find (ОСТАЛОСЬ payday)
-    """
-
-    base = next_payday(now())  # ближайший payday
-
-    drop = base + timedelta(hours=payday_left)
-
-    return drop
-
-
-# =========================
-# RECORD MODEL
-# =========================
-
-def create_record(obj_id, server, payday_left):
-    drop = calc_drop_from_find(payday_left)
-
-    return {
-        "id": obj_id,
-        "server": server,
-        "payday_left": payday_left,
-        "drop": drop
-    }
-
-
-# =========================
-# CLEANUP JOBS
-# =========================
 
 def cancel_jobs(obj_id):
     if obj_id in jobs:
@@ -71,97 +59,199 @@ def cancel_jobs(obj_id):
         del jobs[obj_id]
 
 
-def schedule(app, chat_id, rec):
-    cancel_jobs(rec["id"])
-    jobs[rec["id"]] = []
+def get_tax(server, obj_type, insured):
+    tax = HOUSE_TAX[server] if obj_type == "house" else BIZ_TAX[server]
+    return tax / 2 if insured else tax
 
-    sec = (rec["drop"] - now()).total_seconds()
 
-    if sec > 0:
-        jobs[rec["id"]].append(
-            app.job_queue.run_once(
-                notify,
-                when=sec,
-                chat_id=chat_id,
-                data=rec
-            )
-        )
+def calc_drop(start, payday, server, obj_type, insured):
+    tax = get_tax(server, obj_type, insured)
+    limit = HOUSE_LIMIT if obj_type == "house" else BIZ_LIMIT
+
+    current_tax = limit - payday * tax
+    current = parse_start(start)
+
+    while current_tax < limit:
+        current += timedelta(hours=1)
+        current_tax += tax
+
+    return current
+
+
+def current_tax(record):
+    passed = int((now() - record["start"]).total_seconds() // 3600)
+    tax = get_tax(record["server"], record["type"], record["insured"])
+
+    total = record["base_tax"] + passed * tax
+    limit = HOUSE_LIMIT if record["type"] == "house" else BIZ_LIMIT
+
+    if total > limit:
+        total = limit
+
+    return int(total), limit
 
 
 async def notify(context):
     d = context.job.data
 
+    emoji = "🏠" if d["type"] == "house" else "🏢"
+
     msg = (
-        f"🚨 {d['id']} | {SERVERS[d['server']]}\n"
-        f"⏳ СЛЁТ СЕЙЧАС"
+        f"🚨 {emoji} №{d['id']} "
+        f"на сервере {SERVERS[d['server']]} "
+        f"слетает через {d['mins']} минут"
     )
 
     await context.bot.send_message(context.job.chat_id, msg)
 
 
-# =========================
-# COMMANDS
-# =========================
+async def cleanup(context):
+    obj_id = context.job.data
+    global records
+
+    records = [r for r in records if r["id"] != obj_id]
+    cancel_jobs(obj_id)
+
+
+def schedule(app, chat_id, rec):
+    cancel_jobs(rec["id"])
+    jobs[rec["id"]] = []
+
+    for mins in [10, 5]:
+        sec = (rec["drop"] - now()).total_seconds() - mins * 60
+
+        if sec > 0:
+            job = app.job_queue.run_once(
+                notify,
+                when=sec,
+                chat_id=chat_id,
+                data={
+                    "id": rec["id"],
+                    "server": rec["server"],
+                    "mins": mins,
+                    "type": rec["type"]
+                }
+            )
+            jobs[rec["id"]].append(job)
+
+    sec = (rec["drop"] - now()).total_seconds()
+
+    if sec > 0:
+        jobs[rec["id"]].append(
+            app.job_queue.run_once(cleanup, when=sec, data=rec["id"])
+        )
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Формат:\n"
-        "/add ID SERVER PAYDAY_LEFT\n\n"
-        "Пример:\n"
-        "/add 1618 07 16"
+        "/ah /addhouse\n"
+        "/ab /addbiz\n"
+        "/list\n"
+        "/del\n"
+        "/gone"
     )
 
 
-async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        obj_id = context.args[0]
-        server = context.args[1]
-        payday_left = int(context.args[2])
+async def add_object(update, context, obj_type):
+    text = update.message.text.split("\n", 1)[1]
+    lines = text.split("\n")
+    out = []
 
-        rec = create_record(obj_id, server, payday_left)
-        records.append(rec)
+    for line in lines:
+        try:
+            st, obj_id, pay, ins, server = line.split()
+            insured = ins.lower() == "yes"
 
-        schedule(context.application, update.effective_chat.id, rec)
+            drop = calc_drop(st, int(pay), server, obj_type, insured)
 
-        await update.message.reply_text(
-            f"✅ {obj_id} → слёт {rec['drop'].strftime('%d.%m %H:%M')}"
-        )
+            tax = get_tax(server, obj_type, insured)
+            limit = HOUSE_LIMIT if obj_type == "house" else BIZ_LIMIT
 
-    except:
-        await update.message.reply_text("❌ формат: /add ID SERVER PAYDAY")
+            rec = {
+                "id": obj_id,
+                "type": obj_type,
+                "insured": insured,
+                "server": server,
+                "drop": drop,
+                "start": parse_start(st),
+                "base_tax": limit - int(pay) * tax
+            }
+
+            records.append(rec)
+
+            schedule(context.application, update.effective_chat.id, rec)
+
+            out.append(f"✅ {obj_id} → {drop.strftime('%d.%m %H:%M')}")
+
+        except:
+            out.append(f"❌ {line}")
+
+    await update.message.reply_text("\n".join(out))
 
 
-async def list_records(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def add_house(update, context):
+    await add_object(update, context, "house")
+
+
+async def add_biz(update, context):
+    await add_object(update, context, "biz")
+
+
+async def delete_record(update, context):
+    obj_id = context.args[0]
+    global records
+
+    records = [r for r in records if r["id"] != obj_id]
+    cancel_jobs(obj_id)
+
+    await update.message.reply_text(f"🗑 Удалён {obj_id}")
+
+
+async def gone(update, context):
+    obj_id = context.args[0]
+    global records
+
+    records = [r for r in records if r["id"] != obj_id]
+    cancel_jobs(obj_id)
+
+    await update.message.reply_text(f"✅ Подтверждён слёт {obj_id}")
+
+
+async def list_records(update, context):
+    global records
+    records = [r for r in records if r["drop"] > now()]
+
     if not records:
-        await update.message.reply_text("пусто")
+        await update.message.reply_text("Список пуст")
         return
 
-    msg = "🔥 СЛЁТЫ\n\n"
+    msg = "🔥 Список слётов\n\n"
 
-    for r in sorted(records, key=lambda x: x["drop"]):
-        remaining = r["drop"] - now()
-        h = int(remaining.total_seconds() // 3600)
-        m = int((remaining.total_seconds() % 3600) // 60)
+    for rec in sorted(records, key=lambda x: x["drop"]):
+        tax_now, limit = current_tax(rec)
+
+        emoji = "🏠" if rec["type"] == "house" else "🏢"
+        shield = "🛡" if rec["insured"] else "❌"
 
         msg += (
-            f"🏠 {r['id']} | {SERVERS[r['server']]}\n"
-            f"⏳ осталось: {h}ч {m}м\n"
-            f"🚨 слёт: {r['drop'].strftime('%d.%m %H:%M')}\n\n"
+            f"{emoji} {rec['id']} | {SERVERS[rec['server']]}\n"
+            f"📊 Налог: {tax_now:,} / {limit:,}\n"
+            f"🚨 Слёт: {rec['drop'].strftime('%d.%m %H:%M')}\n"
+            f"{shield} {'Страховка' if rec['insured'] else 'Без страховки'}\n\n"
         )
 
     await update.message.reply_text(msg)
 
 
-# =========================
-# MAIN
-# =========================
-
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("add", add))
-    app.add_handler(CommandHandler("list", list_records))
+    app.add_handler(CommandHandler(["start"], start))
+    app.add_handler(CommandHandler(["addhouse", "ah"], add_house))
+    app.add_handler(CommandHandler(["addbiz", "ab"], add_biz))
+    app.add_handler(CommandHandler(["list"], list_records))
+    app.add_handler(CommandHandler(["del"], delete_record))
+    app.add_handler(CommandHandler(["gone"], gone))
 
     app.run_polling()
 
