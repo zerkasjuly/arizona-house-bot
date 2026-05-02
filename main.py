@@ -38,6 +38,11 @@ def now():
     return datetime.now(MSK)
 
 
+# ✅ следующий payday (строго :00)
+def next_payday(dt):
+    return dt.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+
+
 def parse_start(st):
     dt = datetime.strptime(st, "%H:%M").replace(
         year=now().year,
@@ -64,26 +69,41 @@ def get_tax(server, obj_type, insured):
     return tax / 2 if insured else tax
 
 
-def calc_drop(start, payday, server, obj_type, insured):
+# 🔥 ГЛАВНЫЙ фикс: правильный расчёт слёта
+def calc_drop(start, payday_count, server, obj_type, insured):
     tax = get_tax(server, obj_type, insured)
     limit = HOUSE_LIMIT if obj_type == "house" else BIZ_LIMIT
 
-    current_tax = limit - payday * tax
+    # 👉 учитываем, что текущий налог уже после последнего payday
+    current_tax = limit - (payday_count + 1) * tax
+
     current = parse_start(start)
 
+    # первый будущий payday
+    current = next_payday(current)
+
     while current_tax < limit:
-        current += timedelta(hours=1)
         current_tax += tax
+        if current_tax >= limit:
+            break
+        current = next_payday(current)
 
     return current
 
 
+# 🔥 точный расчёт текущего налога
 def current_tax(record):
-    passed = int((now() - record["start"]).total_seconds() // 3600)
     tax = get_tax(record["server"], record["type"], record["insured"])
-
-    total = record["base_tax"] + passed * tax
     limit = HOUSE_LIMIT if record["type"] == "house" else BIZ_LIMIT
+
+    t = next_payday(record["start"])
+    count = 0
+
+    while t <= now():
+        count += 1
+        t = next_payday(t)
+
+    total = record["base_tax"] + count * tax
 
     if total > limit:
         total = limit
@@ -174,16 +194,17 @@ async def add_object(update, context, obj_type):
                 "server": server,
                 "drop": drop,
                 "start": parse_start(st),
-                "base_tax": limit - int(pay) * tax
+
+                # 👉 тоже фикс
+                "base_tax": limit - (int(pay) + 1) * tax
             }
 
             records.append(rec)
-
             schedule(context.application, update.effective_chat.id, rec)
 
             out.append(f"✅ {obj_id} → {drop.strftime('%d.%m %H:%M')}")
 
-        except:
+        except Exception:
             out.append(f"❌ {line}")
 
     await update.message.reply_text("\n".join(out))
