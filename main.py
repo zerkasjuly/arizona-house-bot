@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("TOKEN")
 MSK = timezone(timedelta(hours=3))
 
 records = []
@@ -31,6 +31,13 @@ BIZ_TAX = {
     "14": 3500,
     "15": 1489,
     "20": 1350
+}
+
+SERVER_OFFSET = {
+    "07": 1,
+    "14": 1,
+    "15": 0,
+    "20": 0
 }
 
 
@@ -67,8 +74,9 @@ def get_tax(server, obj_type, insured):
 def calc_drop(start, payday, server, obj_type, insured):
     tax = get_tax(server, obj_type, insured)
     limit = HOUSE_LIMIT if obj_type == "house" else BIZ_LIMIT
+    offset = SERVER_OFFSET.get(server, 0)
 
-    current_tax = limit - ((payday - 1) * tax)
+    current_tax = limit - ((payday - offset) * tax)
     current = parse_start(start)
 
     while current_tax < limit:
@@ -93,7 +101,6 @@ def current_tax(record):
 
 async def notify(context):
     d = context.job.data
-
     emoji = "🏠" if d["type"] == "house" else "🏢"
 
     msg = (
@@ -171,6 +178,7 @@ async def add_object(update, context, obj_type):
 
             tax = get_tax(server, obj_type, insured)
             limit = HOUSE_LIMIT if obj_type == "house" else BIZ_LIMIT
+            offset = SERVER_OFFSET.get(server, 0)
 
             rec = {
                 "id": obj_id,
@@ -179,16 +187,15 @@ async def add_object(update, context, obj_type):
                 "server": server,
                 "drop": drop,
                 "start": parse_start(st),
-                "base_tax": limit - ((int(pay) - 1) * tax)
+                "base_tax": limit - ((int(pay) - offset) * tax)
             }
 
             records.append(rec)
-
             schedule(context.application, update.effective_chat.id, rec)
 
             out.append(f"✅ {obj_id} → {drop.strftime('%d.%m %H:%M')}")
 
-        except Exception as e:
+        except:
             out.append(f"❌ {line}")
 
     await update.message.reply_text("\n".join(out))
