@@ -66,37 +66,37 @@ def cancel_jobs(obj_id):
         del jobs[obj_id]
 
 
-def get_tax(server, obj_type, insured):
-    tax = HOUSE_TAX[server] if obj_type == "house" else BIZ_TAX[server]
-    return tax / 2 if insured else tax
+def get_tax(server, obj_type):
+    return HOUSE_TAX[server] if obj_type == "house" else BIZ_TAX[server]
+
+
+def get_step(insured):
+    return 1 if insured else 2
 
 
 def calc_drop(start, payday, server, obj_type, insured):
-    tax = get_tax(server, obj_type, insured)
-    limit = HOUSE_LIMIT if obj_type == "house" else BIZ_LIMIT
+    step = get_step(insured)
     offset = SERVER_OFFSET.get(server, 0)
 
-    current_tax = limit - ((payday - offset) * tax)
+    hours_left = (payday - offset) / step
+
+    if hours_left < 0:
+        hours_left = 0
+
     current = parse_start(start)
 
-    while current_tax < limit:
-        current += timedelta(hours=1)
-        current_tax += tax
-
-    return current
+    return current + timedelta(hours=hours_left)
 
 
-def current_tax(record):
+def current_display(record):
     passed = int((now() - record["start"]).total_seconds() // 3600)
-    tax = get_tax(record["server"], record["type"], record["insured"])
 
-    total = record["base_tax"] + passed * tax
-    limit = HOUSE_LIMIT if record["type"] == "house" else BIZ_LIMIT
+    left = record["start_payday"] - passed * get_step(record["insured"])
 
-    if total > limit:
-        total = limit
+    if left < 0:
+        left = 0
 
-    return int(total), limit
+    return left
 
 
 async def notify(context):
@@ -151,8 +151,8 @@ def schedule(app, chat_id, rec):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "/ah /addhouse\n"
-        "/ab /addbiz\n"
+        "/ah\n"
+        "/ab\n"
         "/list\n"
         "/del\n"
         "/gone"
@@ -166,34 +166,24 @@ async def add_object(update, context, obj_type):
 
     for line in lines:
         try:
-            parts = line.split()
+            st, obj_id, pay, ins, server = line.split()
 
-            if parts[0].startswith("/"):
-                parts = parts[1:]
-
-            st, obj_id, pay, ins, server = parts
             insured = ins.lower() == "yes"
-
-            drop = calc_drop(st, int(pay), server, obj_type, insured)
-
-            tax = get_tax(server, obj_type, insured)
-            limit = HOUSE_LIMIT if obj_type == "house" else BIZ_LIMIT
-            offset = SERVER_OFFSET.get(server, 0)
 
             rec = {
                 "id": obj_id,
                 "type": obj_type,
                 "insured": insured,
                 "server": server,
-                "drop": drop,
+                "drop": calc_drop(st, int(pay), server, obj_type, insured),
                 "start": parse_start(st),
-                "base_tax": limit - ((int(pay) - offset) * tax)
+                "start_payday": int(pay)
             }
 
             records.append(rec)
             schedule(context.application, update.effective_chat.id, rec)
 
-            out.append(f"✅ {obj_id} → {drop.strftime('%d.%m %H:%M')}")
+            out.append(f"✅ {obj_id} → {rec['drop'].strftime('%d.%m %H:%M')}")
 
         except:
             out.append(f"❌ {line}")
@@ -240,14 +230,12 @@ async def list_records(update, context):
     msg = "🔥 Список слётов\n\n"
 
     for rec in sorted(records, key=lambda x: x["drop"]):
-        tax_now, limit = current_tax(rec)
-
         emoji = "🏠" if rec["type"] == "house" else "🏢"
         shield = "🛡" if rec["insured"] else "❌"
 
         msg += (
             f"{emoji} {rec['id']} | {SERVERS[rec['server']]}\n"
-            f"📊 Налог: {tax_now:,} / {limit:,}\n"
+            f"📊 Сейчас: {current_display(rec)} payday\n"
             f"🚨 Слёт: {rec['drop'].strftime('%d.%m %H:%M')}\n"
             f"{shield} {'Страховка' if rec['insured'] else 'Без страховки'}\n\n"
         )
