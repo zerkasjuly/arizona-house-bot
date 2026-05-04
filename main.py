@@ -1,4 +1,5 @@
 import os
+import math
 from datetime import datetime, timedelta, timezone
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -71,7 +72,7 @@ def calc_drop(start, payday, server, insured):
     step = get_step(insured)
     offset = SERVER_OFFSET.get(server, 0)
 
-    hours_left = (payday - offset) / step
+    hours_left = math.ceil((payday - offset) / step)
 
     if hours_left < 0:
         hours_left = 0
@@ -170,7 +171,7 @@ async def add_object(update, context, obj_type):
 
             out.append(f"✅ {obj_id} → {rec['drop'].strftime('%d.%m %H:%M')}")
 
-        except:
+        except Exception as e:
             out.append(f"❌ {line}")
 
     await update.message.reply_text("\n".join(out))
