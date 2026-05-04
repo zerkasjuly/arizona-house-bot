@@ -24,18 +24,18 @@ SERVERS = {
     "29": "Mirage"
 }
 
-SERVER_OFFSET = {
-    "03": 0,
-    "07": 1,
-    "08": 0,
-    "10": 0,
-    "12": 0,
-    "14": 1,
-    "15": 0,
-    "20": 0,
-    "24": 0,
-    "28": 0,
-    "29": 0
+SERVER_RULES = {
+    "03": {"yes": 1, "no": 1},
+    "07": {"yes": 1, "no": 1},
+    "08": {"yes": 1, "no": 1},
+    "10": {"yes": 1, "no": 1},
+    "12": {"yes": 1, "no": 1},
+    "14": {"yes": 1, "no": 1},
+    "15": {"yes": 0, "no": 0},
+    "20": {"yes": 0, "no": 0},
+    "24": {"yes": 1, "no": 1},
+    "28": {"yes": 1, "no": 1},
+    "29": {"yes": 0, "no": 0}
 }
 
 
@@ -68,9 +68,13 @@ def get_step(insured):
     return 1 if insured else 2
 
 
+def get_offset(server, insured):
+    return SERVER_RULES[server]["yes" if insured else "no"]
+
+
 def calc_drop(start, payday, server, insured):
     step = get_step(insured)
-    offset = SERVER_OFFSET.get(server, 0)
+    offset = get_offset(server, insured)
 
     hours_left = math.ceil((payday - offset) / step)
 
@@ -101,7 +105,6 @@ async def notify(context):
 async def cleanup(context):
     obj_id = context.job.data
     global records
-
     records = [r for r in records if r["id"] != obj_id]
     cancel_jobs(obj_id)
 
@@ -135,16 +138,6 @@ def schedule(app, chat_id, rec):
         )
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "/ah\n"
-        "/ab\n"
-        "/list\n"
-        "/del ID\n"
-        "/gone ID"
-    )
-
-
 async def add_object(update, context, obj_type):
     text = update.message.text.replace("/ah", "").replace("/ab", "").strip()
     lines = text.split("\n")
@@ -171,7 +164,7 @@ async def add_object(update, context, obj_type):
 
             out.append(f"✅ {obj_id} → {rec['drop'].strftime('%d.%m %H:%M')}")
 
-        except Exception as e:
+        except:
             out.append(f"❌ {line}")
 
     await update.message.reply_text("\n".join(out))
@@ -187,21 +180,17 @@ async def add_biz(update, context):
 
 async def delete_record(update, context):
     obj_id = context.args[0]
-
     global records
     records = [r for r in records if r["id"] != obj_id]
     cancel_jobs(obj_id)
-
     await update.message.reply_text(f"🗑 Удалён {obj_id}")
 
 
 async def gone(update, context):
     obj_id = context.args[0]
-
     global records
     records = [r for r in records if r["id"] != obj_id]
     cancel_jobs(obj_id)
-
     await update.message.reply_text(f"✅ Подтверждён слёт {obj_id}")
 
 
@@ -232,9 +221,8 @@ async def list_records(update, context):
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler(["start"], start))
-    app.add_handler(CommandHandler(["ah", "addhouse"], add_house))
-    app.add_handler(CommandHandler(["ab", "addbiz"], add_biz))
+    app.add_handler(CommandHandler(["ah"], add_house))
+    app.add_handler(CommandHandler(["ab"], add_biz))
     app.add_handler(CommandHandler(["list"], list_records))
     app.add_handler(CommandHandler(["del"], delete_record))
     app.add_handler(CommandHandler(["gone"], gone))
