@@ -9,35 +9,30 @@ MSK = timezone(timedelta(hours=3))
 records = []
 jobs = {}
 
-HOUSE_LIMIT = 104000
-BIZ_LIMIT = 250000
-
 SERVERS = {
+    "03": "Scottdale",
     "07": "Mesa",
+    "08": "Red-Rock",
+    "10": "Surprise",
+    "12": "Glendale",
     "14": "Winslow",
     "15": "Payson",
-    "20": "Sun-City"
-}
-
-HOUSE_TAX = {
-    "07": 1000,
-    "14": 1000,
-    "15": 619,
-    "20": 700
-}
-
-BIZ_TAX = {
-    "07": 2000,
-    "14": 3500,
-    "15": 1489,
-    "20": 1350
+    "20": "Sun-City",
+    "24": "Wednesday",
+    "28": "Mirage"
 }
 
 SERVER_OFFSET = {
+    "03": 0,
     "07": 1,
+    "08": 0,
+    "10": 0,
+    "12": 0,
     "14": 1,
     "15": 0,
-    "20": 0
+    "20": 0,
+    "24": 0,
+    "28": 0
 }
 
 
@@ -66,15 +61,11 @@ def cancel_jobs(obj_id):
         del jobs[obj_id]
 
 
-def get_tax(server, obj_type):
-    return HOUSE_TAX[server] if obj_type == "house" else BIZ_TAX[server]
-
-
 def get_step(insured):
     return 1 if insured else 2
 
 
-def calc_drop(start, payday, server, obj_type, insured):
+def calc_drop(start, payday, server, insured):
     step = get_step(insured)
     offset = SERVER_OFFSET.get(server, 0)
 
@@ -83,9 +74,7 @@ def calc_drop(start, payday, server, obj_type, insured):
     if hours_left < 0:
         hours_left = 0
 
-    current = parse_start(start)
-
-    return current + timedelta(hours=hours_left)
+    return parse_start(start) + timedelta(hours=hours_left)
 
 
 def current_display(record):
@@ -93,23 +82,18 @@ def current_display(record):
 
     left = record["start_payday"] - passed * get_step(record["insured"])
 
-    if left < 0:
-        left = 0
-
-    return left
+    return max(left, 0)
 
 
 async def notify(context):
     d = context.job.data
+
     emoji = "🏠" if d["type"] == "house" else "🏢"
 
-    msg = (
-        f"🚨 {emoji} №{d['id']} "
-        f"на сервере {SERVERS[d['server']]} "
-        f"слетает через {d['mins']} минут"
+    await context.bot.send_message(
+        context.job.chat_id,
+        f"🚨 {emoji} №{d['id']} на сервере {SERVERS[d['server']]} слетает через {d['mins']} минут"
     )
-
-    await context.bot.send_message(context.job.chat_id, msg)
 
 
 async def cleanup(context):
@@ -154,13 +138,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/ah\n"
         "/ab\n"
         "/list\n"
-        "/del\n"
-        "/gone"
+        "/del ID\n"
+        "/gone ID"
     )
 
 
 async def add_object(update, context, obj_type):
-    text = update.message.text.replace("/ah", "").replace("/ab", "").replace("/addhouse", "").replace("/addbiz", "").strip()
+    text = update.message.text.replace("/ah", "").replace("/ab", "").strip()
     lines = text.split("\n")
     out = []
 
@@ -175,7 +159,7 @@ async def add_object(update, context, obj_type):
                 "type": obj_type,
                 "insured": insured,
                 "server": server,
-                "drop": calc_drop(st, int(pay), server, obj_type, insured),
+                "drop": calc_drop(st, int(pay), server, insured),
                 "start": parse_start(st),
                 "start_payday": int(pay)
             }
@@ -201,8 +185,8 @@ async def add_biz(update, context):
 
 async def delete_record(update, context):
     obj_id = context.args[0]
-    global records
 
+    global records
     records = [r for r in records if r["id"] != obj_id]
     cancel_jobs(obj_id)
 
@@ -211,8 +195,8 @@ async def delete_record(update, context):
 
 async def gone(update, context):
     obj_id = context.args[0]
-    global records
 
+    global records
     records = [r for r in records if r["id"] != obj_id]
     cancel_jobs(obj_id)
 
@@ -247,8 +231,8 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler(["start"], start))
-    app.add_handler(CommandHandler(["addhouse", "ah"], add_house))
-    app.add_handler(CommandHandler(["addbiz", "ab"], add_biz))
+    app.add_handler(CommandHandler(["ah", "addhouse"], add_house))
+    app.add_handler(CommandHandler(["ab", "addbiz"], add_biz))
     app.add_handler(CommandHandler(["list"], list_records))
     app.add_handler(CommandHandler(["del"], delete_record))
     app.add_handler(CommandHandler(["gone"], gone))
