@@ -19,7 +19,8 @@ SERVERS = {
     "15": "Payson",
     "20": "Sun-City",
     "24": "Wednesday",
-    "28": "Mirage"
+    "28": "Christmas",
+    "29": "Mirage"
 }
 
 SERVER_OFFSET = {
@@ -32,7 +33,8 @@ SERVER_OFFSET = {
     "15": 0,
     "20": 0,
     "24": 0,
-    "28": 0
+    "28": 0,
+    "29": 0
 }
 
 
@@ -87,7 +89,6 @@ def current_display(record):
 
 async def notify(context):
     d = context.job.data
-
     emoji = "🏠" if d["type"] == "house" else "🏢"
 
     await context.bot.send_message(
